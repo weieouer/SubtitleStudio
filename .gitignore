@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+.pytest_cache/
+
+# 打包产物
+build/
+dist/
+*.py.bak
+packaging/*.log

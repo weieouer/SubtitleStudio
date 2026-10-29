@@ -1,0 +1,12 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+faster-whisper>=1.1.0
+huggingface_hub>=0.30
+# PyAV 19 移除了 metadata_errors 参数，faster-whisper 1.2 解码音频会报错
+av>=16,<19
+srt>=3.5.3
+pypinyin>=0.53
+numpy>=1.26
+jieba>=0.42
+
