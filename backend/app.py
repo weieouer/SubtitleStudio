@@ -32,6 +32,10 @@ from core import validation  # noqa: E402
 from core.model_manager import (CATALOG, DOWNLOADS, engine_gpu_ready, gpu_status,  # noqa: E402
                                 list_auxiliary, set_model_location)
 from core.storage import WRITE_LOCK, atomic_json, locked_file  # noqa: E402
+from core.removal_models import INSTALLER as REMOVAL_INSTALLER, model_status as removal_model_status
+from core.removal_jobs import REMOVAL_JOBS, validate_request as validate_removal_request, video_info as removal_video_info, project_file as removal_project_file
+from core.removal_jobs import validate_segments as validate_removal_segments
+from core.removal_scan import SCANNER as REMOVAL_SCANNER
 from core.paths import (  # noqa: E402
     CONFIG_DIR, DATA_DIR, FRONTEND_DIR, OUTPUTS_DIR, PROJECTS_DIR, UPLOADS_DIR,
 )
@@ -57,7 +61,7 @@ WEB_DIR = FRONTEND_DIR
 OUTPUT_DIR = OUTPUTS_DIR
 PROJECT_DIR = PROJECTS_DIR
 
-VERSION = "2.3.5"
+VERSION = "3.0.0"
 STARTED_AT = time.time()
 SESSION_TOKEN = secrets.token_urlsafe(32)
 DIALOG_LOCK = threading.Lock()
@@ -405,6 +409,19 @@ class Handler(BaseHTTPRequestHandler):
                                 "gpu": gpu_status()})
             elif path == "/api/models/download":
                 self.send_json({"ok": True, "download": DOWNLOADS.get()})
+            elif path == '/api/removal/models':
+                self.send_json({'ok': True, 'model': removal_model_status(), 'installation': REMOVAL_INSTALLER.get()})
+            elif path == '/api/removal/scan':
+                scan = REMOVAL_SCANNER.get(_qget(query, 'id', ''))
+                self.send_json({'ok': scan is not None, 'scan': scan}, 200 if scan else 404)
+            elif path == '/api/removal/info':
+                info = removal_video_info(_require_file(_qget(query, 'path')))
+                project = removal_project_file(info['path'])
+                settings = json.loads(project.read_text(encoding='utf-8')) if project.is_file() else None
+                self.send_json({'ok': True, 'info': info, 'project': settings})
+            elif re.fullmatch(r'/api/removal/jobs/[a-f0-9]{32}', path):
+                job = REMOVAL_JOBS.get(path.rsplit('/', 1)[1])
+                self.send_json({'ok': job is not None, 'job': job}, 200 if job else 404)
             elif path == "/api/config":
                 self.send_json({"ok": True, "config": _read_config(), "path": str(_config_file())})
             elif path == "/api/logs":
@@ -490,16 +507,53 @@ class Handler(BaseHTTPRequestHandler):
             body = self.read_json()
             if path == "/api/jobs":
                 self._create_job(body)
+            elif path == '/api/removal/models/install':
+                with TASK_START_LOCK:
+                    if REMOVAL_JOBS.busy() or any(j.status in ('queued', 'running') for j in list(JOBS.jobs.values())) or DOWNLOADS.get()['status'] in ('downloading', 'preparing'):
+                        raise ValueError('请先完成或取消现有任务，再准备视频修复模型')
+                    self.send_json({'ok': True, 'installation': REMOVAL_INSTALLER.start(body.get('device', 'cuda'))})
+            elif path == '/api/removal/models/cancel':
+                self.send_json({'ok': True, 'installation': REMOVAL_INSTALLER.cancel()})
+            elif path == '/api/removal/jobs':
+                with TASK_START_LOCK:
+                    if REMOVAL_SCANNER.busy():
+                        raise ValueError('请先完成或取消字幕时间段扫描')
+                    if any(j.status in ('queued', 'running') for j in list(JOBS.jobs.values())) or DOWNLOADS.get()['status'] in ('downloading', 'preparing'):
+                        raise ValueError('请先完成或取消现有识别/模型下载任务')
+                    self.send_json({'ok': True, 'job': REMOVAL_JOBS.submit(body)})
+            elif path == '/api/removal/scan':
+                with TASK_START_LOCK:
+                    if REMOVAL_JOBS.busy() or any(j.status in ('queued', 'running') for j in list(JOBS.jobs.values())):
+                        raise ValueError('请先完成或取消视频/识别任务')
+                    self.send_json({'ok': True, 'scan': REMOVAL_SCANNER.start(body)})
+            elif path == '/api/removal/scan/cancel':
+                self.send_json({'ok': True, 'scan': REMOVAL_SCANNER.cancel(body.get('scan_id', ''))})
+            elif re.fullmatch(r'/api/removal/jobs/[a-f0-9]{32}/cancel', path):
+                job = REMOVAL_JOBS.cancel(path.split('/')[4])
+                self.send_json({'ok': job is not None, 'job': job}, 200 if job else 404)
+            elif path == '/api/removal/project':
+                request = validate_removal_request({**body, 'segments': None, 'region': body.get('region') or {'x': 0, 'y': 0, 'width': 1, 'height': 1}, 'preview': False, 'output_dir': str(OUTPUT_DIR)})
+                settings = {key: request[key] for key in ('path', 'region', 'start', 'end', 'max_edge', 'format', 'device')}
+                settings['segments'] = validate_removal_segments(body.get('segments'), request['info']['duration'], require_enabled=False)
+                settings['updated_at'] = time.time()
+                if body.get('region') is None:
+                    settings['region'] = None
+                atomic_json(removal_project_file(request['path']), settings)
+                self.send_json({'ok': True})
             elif path == "/api/alignment/jobs":
                 with TASK_START_LOCK:
                     self._create_alignment_job(body)
             elif path == "/api/models/download":
                 with TASK_START_LOCK:
+                    if REMOVAL_JOBS.busy() or REMOVAL_INSTALLER.busy():
+                        raise ValueError('请先完成或取消视频修复任务')
                     if any(job.status in ("queued", "running") for job in list(JOBS.jobs.values())):
                         raise ValueError("请先完成或取消识别任务，再下载模型")
                     self.send_json({"ok": True, "download": DOWNLOADS.start(body.get("model", ""))})
             elif path == "/api/runtime/gpu":
                 with TASK_START_LOCK:
+                    if REMOVAL_JOBS.busy() or REMOVAL_INSTALLER.busy():
+                        raise ValueError('请先完成或取消视频修复任务')
                     if any(job.status in ("queued", "running") for job in list(JOBS.jobs.values())):
                         raise ValueError("请先完成或取消识别任务，再下载 GPU 环境")
                     self.send_json({"ok": True, "download": DOWNLOADS.start_gpu()})
@@ -573,6 +627,10 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- API 实现 ----------
 
     def _create_alignment_job(self, body: dict) -> None:
+        if REMOVAL_SCANNER.busy():
+            raise ValueError('字幕时间段正在扫描，请先完成或取消')
+        if REMOVAL_JOBS.busy() or REMOVAL_INSTALLER.busy():
+            raise ValueError('视频修复正在运行，请完成或取消后再对齐')
         if DOWNLOADS.get()["status"] in ("downloading", "preparing"):
             raise ValueError("请先完成模型下载")
         path = _require_file(body.get("path", ""))
@@ -606,6 +664,10 @@ class Handler(BaseHTTPRequestHandler):
             self._create_job_locked(body)
 
     def _create_job_locked(self, body: dict) -> None:
+        if REMOVAL_SCANNER.busy():
+            raise ValueError('字幕时间段正在扫描，请先完成或取消')
+        if REMOVAL_JOBS.busy() or REMOVAL_INSTALLER.busy():
+            raise ValueError('视频修复正在运行，请完成或取消后再识别')
         if DOWNLOADS.get()["status"] in ("downloading", "preparing"):
             raise ValueError("模型正在下载或安装，请完成后再识别")
         path = _require_file(body.get("path", ""))

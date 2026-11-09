@@ -119,6 +119,11 @@ def main():
                     # 相同合成音频会触发按内容恢复工程；各轮必须隔离工程库。
                     app.PROJECT_DIR = run_folder / 'projects'
                     app.PROJECT_DIR.mkdir()
+                    from core import removal_jobs
+                    removal_jobs.PROJECTS_DIR = app.PROJECT_DIR
+                    from core import removal_scan
+                    removal_scan.RESULTS_DIR = run_folder / 'removal-results'
+                    removal_scan.RESULTS_DIR.mkdir()
                     app.CONFIG_DIR = run_folder / 'config'
                     app.CONFIG_DIR.mkdir()
                     app.DIALOG_DIRS_FILE = app.CONFIG_DIR / 'dialog_dirs.json'

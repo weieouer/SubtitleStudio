@@ -18,7 +18,7 @@ class InstallerTests(unittest.TestCase):
     def make_source(self, root):
         for name in (*[name for name in package_release.REQUIRED if name != 'run.bat'],
                      'tools/portable/run.bat', 'installer/首次使用说明.txt', 'main.py',
-                     'wheels/dependency.whl', 'docs/private.md', 'tests/private.py',
+                     'wheels/dependency.whl', 'docs/private.md', 'tests/private.py', 'config/removal.json', 'config/removal-scan.json',
                      '.venv/secret.txt', 'data/models/secret.txt', 'data/projects/secret.json'):
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -35,6 +35,8 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue((stage / 'runtime/python/python.exe').is_file())
             self.assertTrue((stage / 'run.bat').is_file())
             self.assertTrue((stage / 'tools/bootstrap.py').is_file())
+            self.assertTrue((stage / 'config/removal.json').is_file())
+            self.assertTrue((stage / 'config/removal-scan.json').is_file())
             self.assertTrue((stage / '首次使用说明.txt').is_file())
             self.assertFalse(any((stage / name).exists() for name in
                                  ('wheels', '.venv', 'data', 'docs', 'tests', 'main.py')))

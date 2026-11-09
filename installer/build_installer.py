@@ -66,7 +66,7 @@ def stage_release(stage: Path, offline: bool) -> int:
     files = package_release.selected_files(ROOT, include_work=False)
     # Only ship what the app needs to run: no dev docs, no test suite.
     runtime_files = {'run.bat', 'requirements.txt', 'requirements-lock.txt',
-                     'config/engines.json', 'config/ui.json',
+                     'config/engines.json', 'config/ui.json', 'config/removal.json', 'config/removal-scan.json',
                      'tools/bootstrap.py', 'tools/pip_progress.py'}
     files = {name: path for name, path in files.items()
              if name.startswith(('backend/', 'frontend/', 'runtime/')) or name in runtime_files

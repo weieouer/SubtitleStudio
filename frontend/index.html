@@ -21,6 +21,7 @@
   })();
 </script>
 <link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="/css/removal.css">
 </head>
 <body>
 <header class="topbar">
@@ -67,6 +68,7 @@
     <section class="card mode-card">
       <h3>处理模式</h3>
       <div class="mode-switch" role="tablist" aria-label="处理模式">
+        <button class="mode-btn" type="button" data-mode="remove" role="tab" aria-selected="false" tabindex="-1" data-tip="框选视频里的硬字幕，使用 ProPainter 修复背景，输出新视频。">字幕消除</button>
         <button class="mode-btn active" type="button" data-mode="extract" role="tab"
                 aria-selected="true" tabindex="0"
                 data-tip="直接识别视频人声生成字幕，不需要剧本；适合没有剧本，或先出字幕再人工校对。">字幕提取</button>
@@ -76,6 +78,30 @@
       </div>
       <p id="modeNote" class="mode-note">无需剧本，直接提取字幕</p>
     </section>
+
+    <section id="removalSourceCard" class="card removal-card" hidden>
+      <h3><span class="removal-step">01</span> 视频素材</h3>
+      <button id="removalChoose" class="removal-source" type="button"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/></svg><b id="removalSourceName">选择需要消除字幕的视频</b><span id="removalSourceMeta">原视频保留，结果另存</span></button>
+      <button id="removalUseCurrent" class="removal-link" type="button" hidden>使用当前视频</button>
+    </section>
+    <section id="removalModelCard" class="card removal-card" hidden>
+      <h3><span class="removal-step">02</span> 修复模型</h3>
+      <div class="removal-model-name"><b>ProPainter</b><span id="removalModelBadge" class="badge">未准备</span></div>
+      <p class="muted small">逐帧定位文字，局部修复；无文字帧保留。模型与环境按需下载。</p>
+      <label class="removal-field">运行环境<select id="removalDevice"><option value="cuda">NVIDIA GPU</option><option value="cpu">CPU</option></select></label>
+      <button id="removalInstall" type="button">下载并准备模型</button>
+      <button id="removalCancelInstall" type="button" hidden>取消准备</button>
+      <p id="removalInstallStatus" class="removal-note" role="status">正在检查模型状态…</p>
+      <details class="removal-license"><summary>来源与许可</summary><a href="https://github.com/sczhou/ProPainter" target="_blank" rel="noreferrer">ProPainter · NTU S-Lab</a><p>模型遵循原作者非商用许可，独立环境不会改动项目依赖。</p></details>
+    </section>
+    <details id="removalQualityCard" class="card removal-card" hidden>
+      <summary>输出与高级设置</summary>
+      <label class="removal-field">精度<select id="removalQuality"><option value="384">快速 · 384</option><option value="512" selected>均衡 · 512</option><option value="640">精细 · 640</option></select></label>
+      <p class="removal-note">处理边长影响修复细节与显存。原视频分辨率保留，视频会重新编码。</p>
+      <label class="removal-field">输出格式<select id="removalFormat"><option value="mkv">MKV · 保留原音轨</option><option value="mp4">MP4 · 兼容音轨</option></select></label>
+      <button id="removalFolder" type="button">选择输出文件夹</button>
+      <p id="removalFolderPath" class="removal-path">开始前选择保存位置</p>
+    </details>
 
     <section class="card">
       <h3 tabindex="0" data-tip="点击或拖入视频、音频和 SRT。对齐模式可导入任意格式 TXT/MD/DOCX 剧本，完整原文仅作纠错参考，无需整理角色格式。拖入文件保存在本机工作副本中，不修改原文件。">素材导入</h3>
@@ -200,6 +226,16 @@
   <div class="splitter" id="splitLeft" data-side="left" role="separator" aria-orientation="vertical" aria-label="调整左侧栏宽度" tabindex="0"></div>
 
   <section class="center">
+    <section id="removalWorkspace" class="removal-workspace" hidden>
+      <div class="removal-workspace-head"><div><span class="removal-eyebrow">视频背景修复</span><h2>框选字幕，修复背景</h2></div><div class="removal-view-switch" role="group" aria-label="消除效果对比"><button id="removalViewOriginal" type="button" class="active">原片</button><button id="removalViewResult" type="button" disabled>预览结果</button></div></div>
+      <div id="removalStage" class="removal-stage">
+        <video id="removalVideo" controls preload="metadata"></video>
+        <svg id="removalSelection" viewBox="0 0 1000 1000" preserveAspectRatio="none" tabindex="0" role="application" aria-label="字幕区域；拖动框选，方向键微调，Shift加方向键移动10像素"><rect id="removalRegion" x="0" y="0" width="0" height="0"/><g id="removalHandles"></g></svg>
+        <div id="removalEmpty" class="removal-empty"><svg viewBox="0 0 64 64" width="56" height="56" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="7" y="12" width="50" height="37" rx="7"/><path d="M17 38h30M22 43h20M27 22l12 7-12 7z"/></svg><h3>先选择一段视频</h3><p>框选字幕，预览背景修复效果</p><span>原片 · 框选 · 预览 · 消除</span></div>
+      </div>
+      <div class="removal-video-tools"><button id="removalDraw" type="button" disabled>框选字幕区域</button><button id="removalClear" type="button" disabled>清除选区</button><span id="removalRegionHint" class="muted small">选区应包含完整文字与描边</span></div>
+      <div class="removal-guidance"><b>先预览，再处理整片</b><span>在有字幕的画面框选，只修复框内区域。复杂背景可能有残影，先用 3 秒预览检查。</span></div>
+    </section>
     <div class="preview-workspace">
     <div class="video-wrap" id="videoWrap">
       <div class="video-frame" id="videoFrame">
@@ -246,6 +282,16 @@
   <div class="splitter" id="splitRight" data-side="right" role="separator" aria-orientation="vertical" aria-label="调整右侧栏宽度" tabindex="0"></div>
 
   <aside class="right">
+    <section id="removalInspector" class="removal-inspector" hidden>
+      <div class="removal-inspector-head"><span class="removal-eyebrow">字幕消除</span><h3>确认区域与范围</h3><p class="muted small">本模式使用独立视频，不改变字幕编辑内容。</p></div>
+      <details class="removal-inspector-block"><summary id="removalRegionSummary">框选区域 · 尚未框选</summary><div class="removal-region-grid"><label>X<input id="removalX" type="number" min="0" step="1" value="0"></label><label>Y<input id="removalY" type="number" min="0" step="1" value="0"></label><label>宽<input id="removalW" type="number" min="2" step="1" value="0"></label><label>高<input id="removalH" type="number" min="2" step="1" value="0"></label></div><p id="removalSelectionInfo" class="removal-note">尚未框选</p></details>
+      <details class="removal-inspector-block"><summary id="removalRangeSummary">处理范围 · 全片</summary><button id="removalFullRange" class="removal-link" type="button">恢复全片范围</button><div class="removal-region-grid"><label>开始 / 秒<input id="removalStart" type="number" min="0" step="0.1" value="0"></label><label>结束 / 秒<input id="removalEnd" type="number" min="0" step="0.1" value="0"></label></div></details>
+      <section class="removal-segments"><div class="removal-segment-heading"><h4>字幕出现时间段</h4><span id="removalSegmentCount" class="muted small">未扫描</span></div><div class="removal-segment-tools"><button id="removalScan" type="button" disabled>扫描全片</button><button id="removalAddSegment" type="button" disabled>＋ 手动添加</button></div><p id="removalScanHint" class="removal-note">扫描整个视频的框选区域；使用 PP-OCRv5 文字检测，候选段需复核。</p><div id="removalSegments" class="removal-segment-list"><p class="removal-note">先框选字幕位置，再扫描；也可手动添加出现时间。</p></div></section>
+      <div class="removal-run-actions"><button id="removalPreview" type="button" disabled>预览当前 3 秒</button><button id="removalStartJob" class="primary" type="button" disabled>开始消除</button><button id="removalCancelJob" type="button" hidden>取消处理</button></div>
+      <div class="removal-progress"><progress id="removalProgress" max="1" value="0"></progress><p id="removalJobStatus" role="status">选择视频后开始框选</p><p id="removalJobDetail" class="removal-note"></p><button id="removalReconnect" class="removal-link" type="button" hidden>继续查询任务</button></div>
+      <div id="removalResult" class="removal-result" hidden><span id="removalResultTitle" class="removal-eyebrow">处理完成</span><p id="removalResultPath" class="removal-path"></p><button id="removalLocate" type="button">定位结果文件</button><button id="removalUseResult" type="button">用于字幕提取</button></div>
+      <p class="removal-bottom-note">短片预览只比较画面，不含音轨；完整输出保留原音轨。模型状态与效果以实际处理为准。</p>
+    </section>
     <div class="right-head">
       <h3 tabindex="0" data-tip="按字幕顺序逐条对照全文参考。疑似错字、谐音、漏字、多字和多候选都需人工判断，剧本与视频不同不代表 ASR 错误。">字幕编辑</h3>
       <label class="cue-select-all" data-tip="勾选全部字幕，包括“不导出”条目；仅用于批量编辑，不改变导出标记。"><input id="selectAllCues" type="checkbox" disabled>全选</label>
@@ -323,10 +369,11 @@
 <dialog id="helpDialog">
   <div class="about-head">
     <h3>字幕工作室</h3>
-    <p class="muted small">版本 <span id="helpVersion">2.3.5</span> · 作者邮箱 <a href="mailto:weieouer@gmail.com">weieouer@gmail.com</a></p>
+    <p class="muted small">版本 <span id="helpVersion">3.0.0</span> · 作者邮箱 <a href="mailto:weieouer@gmail.com">weieouer@gmail.com</a></p>
     <p class="about-notice">未经授权不得商用。</p>
   </div>
   <ol class="help-quick">
+    <li><b>消除</b><span>框选字幕 → 扫描时间段（可手动补充）→ 预览 → 开始消除。</span></li>
     <li><b>导入</b><span>选择音视频提取字幕，或导入 SRT；模型按需下载。</span></li>
     <li><b>处理</b><span>有剧本时：校验差异 → 校准文字 → 对齐时间。</span></li>
     <li><b>复核</b><span>点击字幕定位播放，修改文字和时间；微调先预览，再应用。</span></li>
@@ -377,5 +424,6 @@
 <script src="/js/chinese.js"></script>
 <script src="/js/device-picker.js"></script>
 <script src="/js/app.js"></script>
+<script src="/js/removal.js"></script>
 </body>
 </html>

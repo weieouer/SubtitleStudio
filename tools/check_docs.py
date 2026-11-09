@@ -10,7 +10,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parents[1]
 DOCUMENTS = ('README.md', 'docs/README.md', 'docs/技术总览.md', 'docs/打包与首次启动.md',
              'docs/需求与规范.md', 'docs/问题与待办.md', 'docs/开发记录.md',
-             'docs/设计检查与改进建议.md')
+             'docs/设计检查与改进建议.md', 'docs/字幕消除设计.md')
 
 
 def check() -> dict:

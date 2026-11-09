@@ -1,0 +1,9 @@
+{
+  "model": "PP-OCRv5 mobile detection",
+  "source": "https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml",
+  "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/det/ch_PP-OCRv5_det_mobile.onnx",
+  "sha256": "4d97c44a20d30a81aad087d6a396b08f786c4635742afc391f6621f5c6ae78ae",
+  "sample_interval": 0.25,
+  "threshold": 0.3,
+  "box_threshold": 0.5
+}

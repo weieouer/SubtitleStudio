@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOP = 'SubtitleStudio'
 TREES = ('backend', 'frontend', 'docs', 'tests', 'tools', 'runtime', 'wheels')
 FILES = ('main.py', 'pyproject.toml', '.gitignore', 'README.md', 'requirements.txt',
-         'requirements-lock.txt', 'config/engines.json', 'config/ui.json')
+         'requirements-lock.txt', 'config/engines.json', 'config/ui.json', 'config/removal.json', 'config/removal-scan.json')
 WORK = ('data/projects', 'data/results', 'data/uploads', 'data/outputs')
 REQUIRED = ('run.bat', 'backend/app.py', 'backend/launch.py', 'frontend/index.html',
             'backend/core/progress_console.py',
@@ -106,7 +106,7 @@ def package(output: Path, include_work=False, allow_online=False):
                    '缺失时才联网；在模型菜单下载所需模型。')
     else:
         restore = '解压整个目录后双击 run.bat；首次启动需要联网安装依赖，在模型菜单下载所需模型。'
-    manifest = {'format': 1, 'application_version': '2.3.5', 'platform': 'Windows x64',
+    manifest = {'format': 1, 'application_version': '3.0.0', 'platform': 'Windows x64',
                 'include_work': include_work, 'entrypoint': 'run.bat',
                 'offline_install': bool(wheels),
                 'offline_wheels': {'count': len(wheels),

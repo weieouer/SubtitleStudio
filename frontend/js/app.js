@@ -7,7 +7,7 @@ const THEME_KEY = "subtitleStudio.theme";
 const MODE_LABEL = { extract: "字幕提取", align: "字幕对齐" };
 const THEMES = ["system", "light", "dark"];
 const SESSION_TOKEN = document.querySelector('meta[name="subtitle-session"]')?.content || "";
-const APP_VERSION = '2.3.5';
+const APP_VERSION = '3.0.0';
 const projectVersions = new Map();
 const projectConflicts = new Set();
 let projectSaveChain = Promise.resolve();
@@ -248,7 +248,7 @@ function mergeEditedCueText(original,edited) {
   // 只替换用户改动的可见文字，未改动前后部分的隐藏标点仍保留。
   return raw.slice(0,lo).join('')+next.slice(prefix,next.length-suffix).join('')+raw.slice(hi).join('');
 }
-function editLocked() { return !!(state.jobId || state.matchRequest || state.submitting || state.batchRecognition || state.operation || state.loading || state.uploading || state.scriptUploading || state.scriptPickerOpen || downloadBusy()); }
+function editLocked() { return !!(state.jobId || state.matchRequest || state.submitting || state.batchRecognition || state.operation || state.loading || state.uploading || state.scriptUploading || state.scriptPickerOpen || downloadBusy() || window.SubtitleRemoval?.busy()); }
 function sameDocument(path, epoch, before) {
   return projectPath() === path && state.mediaEpoch === epoch && snapshot() === before;
 }
@@ -393,6 +393,7 @@ function toast(message, type = "info", ms = 3500) {
 }
 
 function setSaveState(text) {
+  if(state.settings.mode==='remove'&&!text.startsWith('消除'))return;
   $("#topSaveState").textContent = text;
 }
 
@@ -696,7 +697,7 @@ function clamp(value, min, max) {
 function normalizeSettings() {
   const s = state.settings;
   if(s.timingDefaultsVersion!==2){s.subtitleLead=0;s.subtitleTail=0;s.timingDefaultsVersion=2;}
-  s.mode = s.mode === "align" ? "align" : "extract";
+  s.mode = ['remove','align','extract'].includes(s.mode) ? s.mode : 'extract';
   s.device = ["auto", "cpu", "cuda"].includes(s.device) ? s.device : "auto";
   s.model = String(s.model || "medium");
   s.vad = s.vad !== false;
@@ -736,6 +737,7 @@ function updateWidthInfo() {
 }
 
 function updateModeNote() {
+  if(state.settings.mode==='remove'){$('#modeNote').textContent='框选硬字幕区域，修复背景并另存视频';return;}
   if (state.settings.mode !== 'align') {
     $('#modeNote').textContent = '提取视频人声，生成并导出 SRT';
     return;
@@ -796,7 +798,7 @@ function syncSettingsUI() {
 function setMode(mode, persist = true) {
   if (persist && editLocked()) return;
   const previous = state.settings.mode;
-  state.settings.mode = mode === "align" ? "align" : "extract";
+  state.settings.mode = ['remove','align','extract'].includes(mode) ? mode : 'extract';
   const next = state.settings.mode;
   $$(".mode-btn").forEach((btn) => {
     const active = btn.dataset.mode === next;
@@ -815,14 +817,15 @@ function setMode(mode, persist = true) {
   }
   if (persist) {
     collectSettings();
-    scheduleSave();
+    if(next!=='remove')scheduleSave();
     scheduleConfigSave();
   }
 }
 
 function updateModeUI() {
   const align = state.settings.mode === "align";
-  document.body.dataset.mode = align ? 'align' : 'extract';
+  document.body.dataset.mode = state.settings.mode;
+  window.SubtitleRemoval?.activate(state.settings.mode==='remove');
   $('#settingsTitle').textContent = '参数';
   const zone = $("#scriptZone");
   $("#dropgrid").classList.toggle("single", !align);
@@ -3715,7 +3718,8 @@ function bindEvents() {
       setMode(buttons[next].dataset.mode); buttons[next].focus(); playSound("key");
     });
   });
-  $("#btnSave").addEventListener("click", saveAll);
+  $("#btnSave").addEventListener("click",()=>state.settings.mode==='remove'
+    ? window.SubtitleRemoval?.save(true).then(ok=>ok&&toast('消除设置已保存','success')) : saveAll());
   $("#btnSourceSrt").addEventListener("click", () => state.settings.mode === 'align' ? importSrt() : exportSrt(false));
   $("#btnHelp").addEventListener("click", () => {
     const version = $("#helpVersion");
@@ -4082,6 +4086,7 @@ function bindEvents() {
     const tag = (e.target.tagName || "").toLowerCase();
     const editing = e.target.isContentEditable || tag === "input" || tag === "select" || tag === "textarea";
     if (e.defaultPrevented || e.isComposing) return;
+    if(state.settings.mode==='remove'){window.SubtitleRemoval?.handleKey(e);return;}
     if (e.ctrlKey && e.key.toLowerCase() === "s") {
       e.preventDefault();
       saveAll();

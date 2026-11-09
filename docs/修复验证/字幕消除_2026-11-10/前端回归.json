@@ -1,0 +1,382 @@
+{
+  "application_version": "3.0.0",
+  "result": {
+    "total": 93,
+    "all_passed": true,
+    "results": [
+      {
+        "name": "subtitle_padding_caps_at_one_second_next_cue_and_media_end_without_mutating_raw",
+        "passed": true
+      },
+      {
+        "name": "preview_wrap_and_time_display_keep_character_limit_and_two_decimals",
+        "passed": true
+      },
+      {
+        "name": "cue_statistics_count_all_alignment_and_deduplicate_suspect_flags",
+        "passed": true
+      },
+      {
+        "name": "legacy_single_line_settings_migrate_without_reversing_export_behavior",
+        "passed": true
+      },
+      {
+        "name": "legacy_drop_interjections_migrates_to_keep_flag",
+        "passed": true
+      },
+      {
+        "name": "zero_padding_defaults_migrate_once_then_remember_manual_values",
+        "passed": true
+      },
+      {
+        "name": "alignment_only_updates_times_without_script_verification",
+        "passed": true
+      },
+      {
+        "name": "waveform_normalizes_quiet_speech_and_gain_changes_display_only",
+        "passed": true
+      },
+      {
+        "name": "asr_duplicate_submission_locked_before_request_returns",
+        "passed": true
+      },
+      {
+        "name": "asr_retains_manual_edits_and_offers_result",
+        "passed": true
+      },
+      {
+        "name": "poll_and_result_download_retry_same_task",
+        "passed": true
+      },
+      {
+        "name": "standalone_srt_save_uses_source_and_revision",
+        "passed": true
+      },
+      {
+        "name": "unbound_cues_never_report_saved",
+        "passed": true
+      },
+      {
+        "name": "saves_are_serial_and_latest_snapshot_wins",
+        "passed": true
+      },
+      {
+        "name": "save_conflict_retains_dirty_edits",
+        "passed": true
+      },
+      {
+        "name": "failed_save_blocks_media_switch",
+        "passed": true
+      },
+      {
+        "name": "stale_waveform_is_ignored",
+        "passed": true
+      },
+      {
+        "name": "unsorted_cue_preview_is_correct",
+        "passed": true
+      },
+      {
+        "name": "manual_midpoint_segment_splits_current_text_without_duplicating_or_touching_next",
+        "passed": true
+      },
+      {
+        "name": "replacement_and_undo_keep_one_document_history",
+        "passed": true
+      },
+      {
+        "name": "selected_split_labels_children_and_preserves_neighbors_then_merge_retains_sources",
+        "passed": true
+      },
+      {
+        "name": "multi_select_merge_joins_text_in_order_and_spans_first_start_to_last_end",
+        "passed": true
+      },
+      {
+        "name": "merge_rejects_non_contiguous_multi_selection",
+        "passed": true
+      },
+      {
+        "name": "merge_suggestion_is_red_badge_and_counted_for_review",
+        "passed": true
+      },
+      {
+        "name": "modified_completion_is_derived_and_reset_restores_original_text_timing_and_exclusion",
+        "passed": true
+      },
+      {
+        "name": "api_timeout_and_session_header",
+        "passed": true
+      },
+      {
+        "name": "time_input_rejects_empty_or_invalid_clock_values",
+        "passed": true
+      },
+      {
+        "name": "default_audio_gain_is_louder_and_volume_controls_it",
+        "passed": true
+      },
+      {
+        "name": "short_cue_drag_stays_positive_and_unlocks_on_lost_capture",
+        "passed": true
+      },
+      {
+        "name": "caption_body_moves_without_changing_duration_and_edges_stop_at_neighbors",
+        "passed": true
+      },
+      {
+        "name": "stale_zoom_waveform_does_not_replace_current_media",
+        "passed": true
+      },
+      {
+        "name": "reference_and_candidates_follow_punctuation_setting_without_changing_original",
+        "passed": true
+      },
+      {
+        "name": "multiple_scripts_append_in_import_order_clear_old_matches_and_save_names",
+        "passed": true
+      },
+      {
+        "name": "failed_or_empty_append_preserves_existing_script_and_suggestions",
+        "passed": true
+      },
+      {
+        "name": "script_drop_batch_uploads_all_files_sequentially_and_unlocks",
+        "passed": true
+      },
+      {
+        "name": "old_backend_empty_success_does_not_clear_scripts_matches_or_history",
+        "passed": true
+      },
+      {
+        "name": "multi_select_old_backend_stops_with_restart_message_without_importing_zero",
+        "passed": true
+      },
+      {
+        "name": "inconsistent_combined_document_is_rejected_before_commit",
+        "passed": true
+      },
+      {
+        "name": "script_picker_imports_every_selected_path_and_cancel_keeps_existing",
+        "passed": true
+      },
+      {
+        "name": "script_slot_shows_latest_name_count_and_ordered_tooltip",
+        "passed": true
+      },
+      {
+        "name": "pause_split_applies_to_current_cues_and_retains_undo",
+        "passed": true
+      },
+      {
+        "name": "presentation_padding_and_minimum_cannot_refill_detected_pauses",
+        "passed": true
+      },
+      {
+        "name": "preview_and_export_share_line_break_setting",
+        "passed": true
+      },
+      {
+        "name": "source_metadata_and_unicode_boundaries_reach_match_api",
+        "passed": true
+      },
+      {
+        "name": "timing_and_device_settings_do_not_rebuild_all_caption_rows",
+        "passed": true
+      },
+      {
+        "name": "verified_good_cues_replace_old_asr_suspicions_with_pass_label",
+        "passed": true
+      },
+      {
+        "name": "verification_report_counts_before_after_and_changed_cues",
+        "passed": true
+      },
+      {
+        "name": "over_width_text_is_suspect_and_empty_text_is_obvious",
+        "passed": true
+      },
+      {
+        "name": "ordinary_problems_are_yellow_and_obvious_timing_problems_are_red",
+        "passed": true
+      },
+      {
+        "name": "labels_do_not_close_export_and_legacy_auto_exclusions_are_released",
+        "passed": true
+      },
+      {
+        "name": "interjection_cue_is_red_and_explains_export_behavior",
+        "passed": true
+      },
+      {
+        "name": "modified_done_is_green_and_suppresses_old_problem_or_recheck_labels",
+        "passed": true
+      },
+      {
+        "name": "manual_srt_and_mkv_export_choose_directory_before_writing",
+        "passed": true
+      },
+      {
+        "name": "cancel_export_directory_never_writes_or_reports_success",
+        "passed": true
+      },
+      {
+        "name": "select_all_uses_whole_document_including_export_exclusions_without_changing_flags",
+        "passed": true
+      },
+      {
+        "name": "bulk_delete_and_export_marking_are_single_step_undoable",
+        "passed": true
+      },
+      {
+        "name": "one_click_calibration_preserves_originals_and_skips_unreliable_reference",
+        "passed": true
+      },
+      {
+        "name": "calibration_completes_missing_and_deletes_extra_from_reference",
+        "passed": true
+      },
+      {
+        "name": "calibration_refreshes_stale_selected_reference_and_keeps_neighbors",
+        "passed": true
+      },
+      {
+        "name": "batch_recognition_supports_eleven_selected_in_current_version",
+        "passed": true
+      },
+      {
+        "name": "batch_recognition_runs_ten_in_reverse_despite_split_results_and_undoes_once",
+        "passed": true
+      },
+      {
+        "name": "cancel_batch_recognition_keeps_completed_results_and_skips_remaining",
+        "passed": true
+      },
+      {
+        "name": "export_all_nonexcluded_ignores_selection_search_and_presentation_padding",
+        "passed": true
+      },
+      {
+        "name": "local_reference_check_includes_neighbors_but_only_updates_target",
+        "passed": true
+      },
+      {
+        "name": "out_of_context_global_hit_is_red_and_not_adoptable",
+        "passed": true
+      },
+      {
+        "name": "editable_subtitle_punctuation_toggle_is_reversible_and_keeps_raw_text",
+        "passed": true
+      },
+      {
+        "name": "editing_without_punctuation_preserves_hidden_unchanged_punctuation",
+        "passed": true
+      },
+      {
+        "name": "split_badge_only_marks_actual_long_text_width_splits",
+        "passed": true
+      },
+      {
+        "name": "calibration_reverifies_targets_even_when_text_is_unchanged",
+        "passed": true
+      },
+      {
+        "name": "calibration_reverification_replaces_modified_done_and_updates_report",
+        "passed": true
+      },
+      {
+        "name": "calibration_without_reference_marks_missing_content_without_changing_text",
+        "passed": true
+      },
+      {
+        "name": "one_click_calibration_accepts_more_than_ten_selected_cues_and_undoes_once",
+        "passed": true
+      },
+      {
+        "name": "large_context_refresh_chunks_requests_and_commits_after_complete_results",
+        "passed": true
+      },
+      {
+        "name": "failed_internal_refresh_preserves_text_and_does_not_start_calibration",
+        "passed": true
+      },
+      {
+        "name": "modification_certificate_survives_alignment_time_changes_but_not_text_changes",
+        "passed": true
+      },
+      {
+        "name": "emotion_punctuation_is_consistent_in_editor_reference_preview_and_toggle",
+        "passed": true
+      },
+      {
+        "name": "calibration_layout_only_processes_selected_runs_and_preserves_unselected_neighbors",
+        "passed": true
+      },
+      {
+        "name": "calibration_layout_chunks_large_selection_and_rejects_old_backend_atomically",
+        "passed": true
+      },
+      {
+        "name": "calibration_sends_interjection_switch_and_accumulates_removal_counts",
+        "passed": true
+      },
+      {
+        "name": "calibration_is_content_only_and_never_runs_audio_alignment",
+        "passed": true
+      },
+      {
+        "name": "pass_label_follows_last_check_and_problem_labels_are_shared",
+        "passed": true
+      },
+      {
+        "name": "emotional_ellipsis_toggle_preserves_number_decimal",
+        "passed": true
+      },
+      {
+        "name": "persistent_disconnect_unlocks_editing_and_resumes_same_task_without_resubmit",
+        "passed": true
+      },
+      {
+        "name": "failed_cancel_detaches_without_claiming_backend_was_cancelled",
+        "passed": true
+      },
+      {
+        "name": "conflict_stops_repeated_save_requests_and_keeps_local_edits",
+        "passed": true
+      },
+      {
+        "name": "conflict_resolution_backs_up_local_before_loading_remote_revision",
+        "passed": true
+      },
+      {
+        "name": "content_confirmation_never_masks_timing_errors_or_removes_review_filter",
+        "passed": true
+      },
+      {
+        "name": "unresolved_long_timing_does_not_count_as_aligned_even_with_model_record",
+        "passed": true
+      },
+      {
+        "name": "raw_preview_matches_export_unless_timing_preview_explicitly_enabled",
+        "passed": true
+      },
+      {
+        "name": "timing_apply_rejects_cut_words_or_missing_word_evidence_and_preserves_history",
+        "passed": true
+      },
+      {
+        "name": "safe_timing_apply_is_undoable_and_keeps_original_and_export_flags",
+        "passed": true
+      },
+      {
+        "name": "timing_apply_refuses_existing_overlaps_instead_of_partial_changes",
+        "passed": true
+      },
+      {
+        "name": "successful_export_keeps_visible_result_path_for_location_and_copy",
+        "passed": true
+      }
+    ]
+  },
+  "app_js_sha256": "4dabfca73a9b86ee5c8606dda9924f0b406909333325b78275e7839e64ead074"
+}
