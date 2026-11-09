@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "model": "propainter",
+  "repository": "https://github.com/sczhou/ProPainter",
+  "revision": "326782529a63d997cab80ab21439b92ed422b3d3",
+  "source_url": "https://codeload.github.com/sczhou/ProPainter/zip/326782529a63d997cab80ab21439b92ed422b3d3",
+  "weights_base": "https://github.com/sczhou/ProPainter/releases/download/v0.1.0/",
+  "weights": ["ProPainter.pth", "recurrent_flow_completion.pth", "raft-things.pth"],
+  "license": "NTU S-Lab License 1.0 (non-commercial)",
+  "torch": ["torch==2.9.1", "torchvision==0.24.1"],
+  "packages": ["numpy==2.2.6", "av==19.0.2", "opencv-python-headless==4.12.0.88", "Pillow==12.0.0", "scipy==1.16.3", "imageio==2.37.0", "einops==0.8.1", "tqdm==4.67.1", "timm==1.0.22", "PyYAML==6.0.3", "requests==2.32.5", "addict==2.4.0", "future==1.0.0", "matplotlib==3.10.7", "scikit-image==0.25.2", "yapf==0.43.0"],
+  "defaults": {"max_edge": 512, "window_frames": 20, "overlap_frames": 4, "preview_seconds": 3}
+}
