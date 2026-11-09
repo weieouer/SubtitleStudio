@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "model": "medium",
+  "requested_device": "cpu",
+  "offline_environment": true,
+  "fixture": "3-second synthetic silence",
+  "elapsed_seconds": 3.67,
+  "cue_count": 0,
+  "info": {
+    "duration": 3.0,
+    "language": "zh",
+    "device": "cpu",
+    "compute_type": "int8",
+    "model": "medium"
+  },
+  "scope": "engine smoke only; not speech accuracy or performance benchmark"
+}

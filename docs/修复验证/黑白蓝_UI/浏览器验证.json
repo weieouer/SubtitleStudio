@@ -1,0 +1,92 @@
+[
+  {
+    "name": "page_boot",
+    "passed": true
+  },
+  {
+    "name": "default_volume_80_and_volume_persistence",
+    "passed": true
+  },
+  {
+    "name": "film_favicon_and_header_logo",
+    "passed": true
+  },
+  {
+    "name": "filter_text_not_clipped",
+    "passed": true,
+    "geometry": {
+      "height": 36,
+      "line": 18.849999999999998,
+      "inner": 22,
+      "text": "全部"
+    }
+  },
+  {
+    "name": "unified_font_square_checkbox_and_direct_alignment_requires_srt",
+    "passed": true
+  },
+  {
+    "name": "slider_sync_and_tick_audio",
+    "passed": true
+  },
+  {
+    "name": "manual_srt_alignment_without_recognition",
+    "passed": true
+  },
+  {
+    "name": "standalone_srt_save_restore",
+    "passed": true
+  },
+  {
+    "name": "current_media_queued_once_and_shown_in_bottom_queue",
+    "passed": true
+  },
+  {
+    "name": "asr_ui_lock_and_completion_audio_mock_engine",
+    "passed": true
+  },
+  {
+    "name": "generated_srt_file_and_automatic_alignment_handoff",
+    "passed": true
+  },
+  {
+    "name": "number_switch_preview_export_and_original_preserved",
+    "passed": true
+  },
+  {
+    "name": "alignment_panel_preview_timeline_and_time_edit_undo",
+    "passed": true
+  },
+  {
+    "name": "zoom_fetches_detailed_waveform_region",
+    "passed": true
+  },
+  {
+    "name": "short_mode_note_one_line",
+    "passed": true
+  },
+  {
+    "name": "subtitle_file_and_export_settings_persist_in_project",
+    "passed": true
+  },
+  {
+    "name": "browser_export",
+    "passed": true
+  },
+  {
+    "name": "reduced_motion_disables_decorative_animation",
+    "passed": true
+  },
+  {
+    "name": "compact_desktop_all_controls_reachable",
+    "passed": true
+  },
+  {
+    "name": "small_screen_entry_visible",
+    "passed": true
+  },
+  {
+    "name": "no_uncaught_browser_errors",
+    "passed": true
+  }
+]

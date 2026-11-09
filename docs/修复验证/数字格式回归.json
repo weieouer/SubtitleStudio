@@ -1,0 +1,216 @@
+{
+  "total": 30,
+  "all_passed": true,
+  "results": [
+    {
+      "name": "number_format_1",
+      "input": "第12集，3个人。",
+      "arabic": false,
+      "expected": "第十二集，三个人。",
+      "passed": true
+    },
+    {
+      "name": "number_format_2",
+      "input": "第十二集，三个人。",
+      "arabic": true,
+      "expected": "第12集，3个人。",
+      "passed": true
+    },
+    {
+      "name": "number_format_3",
+      "input": "一百二十三元",
+      "arabic": true,
+      "expected": "123元",
+      "passed": true
+    },
+    {
+      "name": "number_format_4",
+      "input": "123元",
+      "arabic": false,
+      "expected": "一百二十三元",
+      "passed": true
+    },
+    {
+      "name": "number_format_5",
+      "input": "一万零二十元",
+      "arabic": true,
+      "expected": "10020元",
+      "passed": true
+    },
+    {
+      "name": "number_format_6",
+      "input": "10020元",
+      "arabic": false,
+      "expected": "一万零二十元",
+      "passed": true
+    },
+    {
+      "name": "number_format_7",
+      "input": "二〇二六年",
+      "arabic": true,
+      "expected": "2026年",
+      "passed": true
+    },
+    {
+      "name": "number_format_8",
+      "input": "2026年",
+      "arabic": false,
+      "expected": "二〇二六年",
+      "passed": true
+    },
+    {
+      "name": "number_format_9",
+      "input": "负三点五米",
+      "arabic": true,
+      "expected": "-3.5米",
+      "passed": true
+    },
+    {
+      "name": "number_format_10",
+      "input": "-3.5米",
+      "arabic": false,
+      "expected": "负三点五米",
+      "passed": true
+    },
+    {
+      "name": "number_format_11",
+      "input": "零点零零五秒",
+      "arabic": true,
+      "expected": "0.005秒",
+      "passed": true
+    },
+    {
+      "name": "number_format_12",
+      "input": "0.005秒",
+      "arabic": false,
+      "expected": "零点零零五秒",
+      "passed": true
+    },
+    {
+      "name": "number_format_13",
+      "input": "三点五分",
+      "arabic": true,
+      "expected": "3点5分",
+      "passed": true
+    },
+    {
+      "name": "number_format_14",
+      "input": "三点五分钟",
+      "arabic": true,
+      "expected": "3.5分钟",
+      "passed": true
+    },
+    {
+      "name": "number_format_15",
+      "input": "电话一三八〇〇一三八〇〇〇",
+      "arabic": true,
+      "expected": "电话13800138000",
+      "passed": true
+    },
+    {
+      "name": "number_format_16",
+      "input": "电话13800138000",
+      "arabic": false,
+      "expected": "电话一三八〇〇一三八〇〇〇",
+      "passed": true
+    },
+    {
+      "name": "number_format_17",
+      "input": "编号0012",
+      "arabic": false,
+      "expected": "编号〇〇一二",
+      "passed": true
+    },
+    {
+      "name": "number_format_18",
+      "input": "编号〇〇一二",
+      "arabic": true,
+      "expected": "编号0012",
+      "passed": true
+    },
+    {
+      "name": "number_format_19",
+      "input": "共计两百元",
+      "arabic": true,
+      "expected": "共计200元",
+      "passed": true
+    },
+    {
+      "name": "number_format_20",
+      "input": "十二",
+      "arabic": true,
+      "expected": "12",
+      "passed": true
+    },
+    {
+      "name": "number_format_21",
+      "input": "0",
+      "arabic": false,
+      "expected": "零",
+      "passed": true
+    },
+    {
+      "name": "number_format_22",
+      "input": "王一博在三体里，一心一意，一起走。",
+      "arabic": true,
+      "expected": "王一博在三体里，一心一意，一起走。",
+      "passed": true
+    },
+    {
+      "name": "number_format_23",
+      "input": "万一有人问，三三两两地走。",
+      "arabic": true,
+      "expected": "万一有人问，三三两两地走。",
+      "passed": true
+    },
+    {
+      "name": "number_format_24",
+      "input": "一百二元",
+      "arabic": true,
+      "expected": "一百二元",
+      "passed": true
+    },
+    {
+      "name": "number_format_25",
+      "input": "AIGC2026和DJ004_001、H.264、3D",
+      "arabic": false,
+      "expected": "AIGC2026和DJ004_001、H.264、3D",
+      "passed": true
+    },
+    {
+      "name": "number_format_26",
+      "input": "一亿元",
+      "arabic": true,
+      "expected": "100000000元",
+      "passed": true
+    },
+    {
+      "name": "number_format_27",
+      "input": "100000000元",
+      "arabic": false,
+      "expected": "一亿元",
+      "passed": true
+    },
+    {
+      "name": "number_format_28",
+      "input": "一万亿元",
+      "arabic": true,
+      "expected": "1000000000000元",
+      "passed": true
+    },
+    {
+      "name": "number_format_29",
+      "input": "1000000000000元",
+      "arabic": false,
+      "expected": "一万亿元",
+      "passed": true
+    },
+    {
+      "name": "number_format_30",
+      "input": "售价1,234.50元",
+      "arabic": false,
+      "expected": "售价一千二百三十四点五零元",
+      "passed": true
+    }
+  ]
+}

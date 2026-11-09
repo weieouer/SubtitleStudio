@@ -1,0 +1,11 @@
+{
+  "synthetic": true,
+  "duration_seconds": 1900,
+  "pcm_bytes": 121600000,
+  "cues": 632,
+  "windows": 9,
+  "planning_seconds": 0.14698640001006424,
+  "quiet_edges": 18,
+  "context_edges": 0,
+  "max_window_seconds": 230.88000000000002
+}

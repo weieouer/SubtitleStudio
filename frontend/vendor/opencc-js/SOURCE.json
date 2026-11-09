@@ -1,0 +1,17 @@
+{
+  "package": "opencc-js",
+  "version": "1.3.1",
+  "repository": "https://github.com/nk2028/opencc-js",
+  "tarball": "https://registry.npmmirror.com/opencc-js/-/opencc-js-1.3.1.tgz",
+  "sha256": "98be1b24e4c12de7821a579c20d78c0f4176dfa25dec1c7911e4cfb91c916fc5",
+  "files": [
+    {
+      "file": "LICENSE",
+      "bytes": 1080
+    },
+    {
+      "file": "t2cn.js",
+      "bytes": 66746
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+# Python environments and generated files
+.venv/
+.venv.broken_*/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Portable release resources are prepared locally, not committed as source.
+runtime/
+wheels/
+dist/
+build/
+installer/build/
+PACKAGE_MANIFEST.json
+
+# Models, engine environments, user media, projects, caches and logs
+data/
+config/dialog_dirs.json
+config/ui.json
+
+# Local editor state and secrets
+.env
+.env.*
+!.env.example
+.vscode/*.local.json
+*.partial
+*.tmp

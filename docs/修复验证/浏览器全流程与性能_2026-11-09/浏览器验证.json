@@ -1,0 +1,224 @@
+[
+  {
+    "name": "page_boot",
+    "passed": true
+  },
+  {
+    "name": "symmetric_startup_ignores_old_widths_maximized_sides_expand_and_restore",
+    "passed": true
+  },
+  {
+    "name": "default_volume_80_and_volume_persistence",
+    "passed": true
+  },
+  {
+    "name": "film_favicon_and_header_logo",
+    "passed": true
+  },
+  {
+    "name": "filter_text_not_clipped",
+    "passed": true,
+    "geometry": {
+      "height": 36,
+      "line": 18,
+      "inner": 34,
+      "text": "全部"
+    }
+  },
+  {
+    "name": "voice_only_in_center_persists_toggle_and_text_hover_tooltip_without_question_icons",
+    "passed": true
+  },
+  {
+    "name": "interjection_toggle_default_off_removes_and_explains_scope",
+    "passed": true
+  },
+  {
+    "name": "unified_font_square_checkbox_and_direct_alignment_requires_srt",
+    "passed": true
+  },
+  {
+    "name": "three_models_two_auxiliary_compact_download_cancel_resume_mock_transport",
+    "passed": true
+  },
+  {
+    "name": "neutral_dark_shell_and_deeper_center_without_warm_tint",
+    "passed": true
+  },
+  {
+    "name": "slider_sync_and_tick_audio",
+    "passed": true
+  },
+  {
+    "name": "manual_srt_alignment_without_recognition",
+    "passed": true
+  },
+  {
+    "name": "standalone_srt_save_restore",
+    "passed": true
+  },
+  {
+    "name": "top_project_library_restores_saved_subtitles_and_parameters",
+    "passed": true
+  },
+  {
+    "name": "asr_ui_lock_and_completion_audio_mock_engine",
+    "passed": true
+  },
+  {
+    "name": "generated_srt_file_and_automatic_alignment_handoff",
+    "passed": true
+  },
+  {
+    "name": "number_switch_preview_export_and_original_preserved",
+    "passed": true
+  },
+  {
+    "name": "subtitle_wrap_checked_preserves_lines_unchecked_flattens_actual_srt_without_source_time_changes",
+    "passed": true
+  },
+  {
+    "name": "punctuation_switch_applies_to_preview_and_overlay_without_touching_source",
+    "passed": true
+  },
+  {
+    "name": "min_max_display_duration_changes_preview_export_keeps_current_cue_times",
+    "passed": true
+  },
+  {
+    "name": "alignment_panel_preview_timeline_and_time_edit_undo",
+    "passed": true
+  },
+  {
+    "name": "zoom_fetches_detailed_waveform_region",
+    "passed": true
+  },
+  {
+    "name": "short_mode_note_one_line",
+    "passed": true
+  },
+  {
+    "name": "subtitle_file_and_export_settings_persist_in_project",
+    "passed": true
+  },
+  {
+    "name": "browser_export",
+    "passed": true
+  },
+  {
+    "name": "export_dialog_writes_real_mkv_audio_and_subtitle_container",
+    "passed": true
+  },
+  {
+    "name": "srt_drop_combined_alignment_reference_review_undo_and_original_persistence",
+    "passed": true
+  },
+  {
+    "name": "regional_recognition_replaces_only_target_and_checks_its_script_reference",
+    "passed": true
+  },
+  {
+    "name": "simplified_subtitles_optional_script_alignment_wave_gain_and_single_save_indicator",
+    "passed": true
+  },
+  {
+    "name": "single_sidebar_tracks_actual_playback_and_preview_character_wrap",
+    "passed": true
+  },
+  {
+    "name": "plain_wheel_zoom_drag_resize_and_proportional_viewport_scrollbar",
+    "passed": true
+  },
+  {
+    "name": "ctrl_latest_seek_merge_split_modified_done_reset_blank_add_and_undo",
+    "passed": true
+  },
+  {
+    "name": "reimport_prompts_to_restore_previous_settings_and_generated_subtitles_or_start_fresh",
+    "passed": true
+  },
+  {
+    "name": "reduced_motion_disables_decorative_animation",
+    "passed": true
+  },
+  {
+    "name": "compact_desktop_all_controls_reachable",
+    "passed": true
+  },
+  {
+    "name": "small_screen_entry_visible",
+    "passed": true
+  },
+  {
+    "name": "multi_file_drag_continuous_match_latest_name_count_punctuation_toggle_and_persistence",
+    "passed": true
+  },
+  {
+    "name": "sticky_single_column_header_global_disabled_controls_pause_change_and_protected_silence",
+    "passed": true
+  },
+  {
+    "name": "unordered_B_A_import_A_B_video_sources_persist_split_inherits_merge_rematches_extract_hides_reference",
+    "passed": true
+  },
+  {
+    "name": "multi_select_picker_real_file_parsing_keeps_both_sources_and_nonzero_content",
+    "passed": true
+  },
+  {
+    "name": "old_backend_empty_success_preserves_existing_scripts_and_prompts_restart",
+    "passed": true
+  },
+  {
+    "name": "damaged_words_match_and_save_succeeds_pass_and_problem_badges_differ",
+    "passed": true
+  },
+  {
+    "name": "export_directory_selection_cancel_does_not_write_or_show_success",
+    "passed": true
+  },
+  {
+    "name": "global_select_all_includes_excluded_without_changing_export_flags_and_batch_edit_undo",
+    "passed": true
+  },
+  {
+    "name": "one_click_calibration_preserves_originals_shows_verified_labels_and_undoes_once",
+    "passed": true
+  },
+  {
+    "name": "batch_region_recognition_preserves_unselected_handles_two_jobs_and_no_ten_limit",
+    "passed": true
+  },
+  {
+    "name": "real_srt_exports_all_nonexcluded_with_exact_current_millisecond_times",
+    "passed": true
+  },
+  {
+    "name": "global_exact_hit_outside_local_context_is_red_and_selected_check_keeps_neighbors",
+    "passed": true
+  },
+  {
+    "name": "midpoint_splits_real_text_balanced_independent_without_appending_to_next",
+    "passed": true
+  },
+  {
+    "name": "punctuation_toggle_controls_editor_reference_preview_real_srt_and_preserves_hidden_marks_on_edit",
+    "passed": true
+  },
+  {
+    "name": "two_row_toolbar_has_larger_buttons_recognition_in_both_modes_and_global_realign",
+    "passed": true
+  },
+  {
+    "name": "yellow_suspect_red_obvious_and_green_modified_done_replace_old_labels",
+    "passed": true
+  },
+  {
+    "name": "calibration_marks_fragment_red_then_multi_select_merge_joins_text_and_time",
+    "passed": true
+  },
+  {
+    "name": "no_uncaught_browser_errors",
+    "passed": true
+  }
+]

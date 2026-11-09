@@ -1,0 +1,12 @@
+{
+  "backend": 32,
+  "frontend": 21,
+  "numeric": 30,
+  "browser": 14,
+  "local_model": 1,
+  "all_passed": true,
+  "legacy_removed": true,
+  "v1_preserved": true,
+  "source_snapshot_mismatches": [],
+  "broken_links": []
+}

@@ -1,0 +1,7 @@
+{
+  "device": "cpu",
+  "import_seconds": 29.874152599993977,
+  "model_load_seconds": 9.571395899998606,
+  "total_cold_start_seconds": 39.44554849999258,
+  "policy": "measure_only_no_persistent_worker"
+}

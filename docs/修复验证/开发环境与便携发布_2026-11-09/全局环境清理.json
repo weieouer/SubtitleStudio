@@ -1,0 +1,18 @@
+{
+  "python": "C:\\Users\\Ouer\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+  "before_count": 70,
+  "after_count": 2,
+  "removed_count": 68,
+  "retained": [
+    {
+      "name": "pip",
+      "version": "26.2.1"
+    },
+    {
+      "name": "setuptools",
+      "version": "84.0.0"
+    }
+  ],
+  "backup": "C:\\Users\\Ouer\\.virtualenvs\\_backups\\global-python-3.13-20261109-df51a243",
+  "all_passed": true
+}

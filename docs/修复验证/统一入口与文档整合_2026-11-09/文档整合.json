@@ -1,0 +1,51 @@
+{
+  "date": "2026-11-09",
+  "documents": 6,
+  "before_bytes": 187106,
+  "after_bytes": 22184,
+  "reduction_percent": 88.1,
+  "archived": [
+    {
+      "source": "README.md",
+      "archive": "docs\\archive\\文档整合前_2026-11-09\\根目录_README.md",
+      "original_bytes": 28854,
+      "original_sha256": "8666b56b9dc204f0d43827eefaecd8946f20e05008d42e6b5d4fedd422f8922d"
+    },
+    {
+      "source": "docs\\README.md",
+      "archive": "docs\\archive\\文档整合前_2026-11-09\\README.md",
+      "original_bytes": 2032,
+      "original_sha256": "c2192b61b8a38d96fe7bcdb6b77dd32b1789b167fb919e6049801c324ceaa460"
+    },
+    {
+      "source": "docs\\技术总览.md",
+      "archive": "docs\\archive\\文档整合前_2026-11-09\\技术总览.md",
+      "original_bytes": 58269,
+      "original_sha256": "966c6b81bfa4e5fca28b37cb48205dd7071fd0026b52bfa92df0a718fe921e3b"
+    },
+    {
+      "source": "docs\\需求与规范.md",
+      "archive": "docs\\archive\\文档整合前_2026-11-09\\需求与规范.md",
+      "original_bytes": 40930,
+      "original_sha256": "23713b87f1a904a8ea38773a471f8fa92f689d2a2eeeb077cc1d03b12bb75815"
+    },
+    {
+      "source": "docs\\问题与待办.md",
+      "archive": "docs\\archive\\文档整合前_2026-11-09\\问题与待办.md",
+      "original_bytes": 14303,
+      "original_sha256": "e3c08176b7f2db6cf008b9c4ac4965478b52b57c21acac09223144b05aea77ed"
+    },
+    {
+      "source": "docs\\开发记录.md",
+      "archive": "docs\\archive\\文档整合前_2026-11-09\\开发记录.md",
+      "original_bytes": 42718,
+      "original_sha256": "5167ef9303df25790f29fc47635d0642169b07375e166f5d0a09e444f703e110"
+    },
+    {
+      "source": "docs\\检查报告_2026-11-09.md",
+      "archive": "docs\\archive\\文档整合前_2026-11-09\\检查报告_2026-11-09.md",
+      "original_bytes": 6659,
+      "original_sha256": "6bf889c335b6d52b83281b4543187489cfc12ed9ca24f7388284ffefa80e6285"
+    }
+  ]
+}

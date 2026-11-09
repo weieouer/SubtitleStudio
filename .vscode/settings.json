@@ -1,0 +1,57 @@
+// SubtitleStudio 工作区设置（只影响本项目，不参与 Settings Sync）
+{
+    // .venv / runtime / data / installer/build 里是依赖、模型和打包产物，
+    // 排除后文件监听、全文搜索和 Pylance 建索引都会明显变快。
+    "files.watcherExclude": {
+        "**/.venv/**": true,
+        "**/runtime/**": true,
+        "**/data/engines/**": true,
+        "**/data/models/**": true,
+        "**/data/cache/**": true,
+        "**/data/logs/**": true,
+        "**/installer/build/**": true,
+        "**/.ruff_cache/**": true,
+        "**/__pycache__/**": true
+    },
+    "search.exclude": {
+        "**/.venv": true,
+        "**/runtime": true,
+        "**/data/engines": true,
+        "**/data/models": true,
+        "**/data/cache": true,
+        "**/data/logs": true,
+        "**/installer/build": true,
+        "**/.ruff_cache": true,
+        "**/__pycache__": true
+    },
+    "files.exclude": {
+        "**/.git": false,
+        "**/.svn": false,
+        "**/.hg": false,
+        "**/CVS": false,
+        "**/.DS_Store": false,
+        "**/Thumbs.db": false
+    },
+    "explorer.excludeGitIgnore": false,
+
+    // 开发用的解释器（run.bat 实际启动用的是 runtime\python，两者依赖一致）
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "python-envs.workspaceSearchPaths": [".venv"],
+    "python-envs.defaultPackageManager": "ms-python.python:pip",
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateEnvInCurrentTerminal": true,
+    "python.analysis.exclude": [
+        "**/runtime/**",
+        "**/data/**",
+        "**/installer/build/**"
+    ],
+
+    // 保存时用 Ruff 格式化并整理 import（已安装 charliermarsh.ruff）
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports.ruff": "explicit"
+        }
+    }
+}

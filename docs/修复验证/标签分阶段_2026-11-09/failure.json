@@ -1,0 +1,271 @@
+{
+  "error": "align time 0.12000000000000001-0.92",
+  "passed_checks": [
+    {
+      "name": "page_boot",
+      "passed": true
+    },
+    {
+      "name": "symmetric_startup_ignores_old_widths_maximized_sides_expand_and_restore",
+      "passed": true
+    },
+    {
+      "name": "default_volume_80_and_volume_persistence",
+      "passed": true
+    },
+    {
+      "name": "film_favicon_and_header_logo",
+      "passed": true
+    },
+    {
+      "name": "filter_text_not_clipped",
+      "passed": true,
+      "geometry": {
+        "height": 36,
+        "line": 18,
+        "inner": 34,
+        "text": "全部"
+      }
+    },
+    {
+      "name": "voice_only_in_center_persists_toggle_and_text_hover_tooltip_without_question_icons",
+      "passed": true
+    },
+    {
+      "name": "interjection_toggle_default_off_removes_and_explains_scope",
+      "passed": true
+    },
+    {
+      "name": "unified_font_square_checkbox_and_direct_alignment_requires_srt",
+      "passed": true
+    },
+    {
+      "name": "three_models_two_auxiliary_compact_download_cancel_resume_mock_transport",
+      "passed": true
+    },
+    {
+      "name": "neutral_dark_shell_and_deeper_center_without_warm_tint",
+      "passed": true
+    },
+    {
+      "name": "slider_sync_and_tick_audio",
+      "passed": true
+    },
+    {
+      "name": "manual_srt_alignment_without_recognition",
+      "passed": true
+    },
+    {
+      "name": "standalone_srt_save_restore",
+      "passed": true
+    },
+    {
+      "name": "top_project_library_restores_saved_subtitles_and_parameters",
+      "passed": true
+    },
+    {
+      "name": "asr_ui_lock_and_completion_audio_mock_engine",
+      "passed": true
+    },
+    {
+      "name": "generated_srt_file_and_automatic_alignment_handoff",
+      "passed": true
+    },
+    {
+      "name": "number_switch_preview_export_and_original_preserved",
+      "passed": true
+    },
+    {
+      "name": "subtitle_wrap_checked_preserves_lines_unchecked_flattens_actual_srt_without_source_time_changes",
+      "passed": true
+    },
+    {
+      "name": "punctuation_switch_applies_to_preview_and_overlay_without_touching_source",
+      "passed": true
+    },
+    {
+      "name": "min_max_display_duration_changes_preview_export_keeps_current_cue_times",
+      "passed": true
+    },
+    {
+      "name": "alignment_panel_preview_timeline_and_time_edit_undo",
+      "passed": true
+    },
+    {
+      "name": "zoom_fetches_detailed_waveform_region",
+      "passed": true
+    },
+    {
+      "name": "short_mode_note_one_line",
+      "passed": true
+    },
+    {
+      "name": "subtitle_file_and_export_settings_persist_in_project",
+      "passed": true
+    },
+    {
+      "name": "browser_export",
+      "passed": true
+    },
+    {
+      "name": "export_dialog_writes_real_mkv_audio_and_subtitle_container",
+      "passed": true
+    },
+    {
+      "name": "srt_drop_combined_alignment_reference_review_undo_and_original_persistence",
+      "passed": true
+    },
+    {
+      "name": "regional_recognition_replaces_only_target_and_checks_its_script_reference",
+      "passed": true
+    },
+    {
+      "name": "simplified_subtitles_optional_script_alignment_wave_gain_and_single_save_indicator",
+      "passed": true
+    },
+    {
+      "name": "single_sidebar_tracks_actual_playback_and_preview_character_wrap",
+      "passed": true
+    },
+    {
+      "name": "plain_wheel_zoom_drag_resize_and_proportional_viewport_scrollbar",
+      "passed": true
+    },
+    {
+      "name": "ctrl_latest_seek_merge_split_modified_done_reset_blank_add_and_undo",
+      "passed": true
+    },
+    {
+      "name": "reimport_prompts_to_restore_previous_settings_and_generated_subtitles_or_start_fresh",
+      "passed": true
+    },
+    {
+      "name": "reduced_motion_disables_decorative_animation",
+      "passed": true
+    },
+    {
+      "name": "compact_desktop_all_controls_reachable",
+      "passed": true
+    },
+    {
+      "name": "small_screen_entry_visible",
+      "passed": true
+    },
+    {
+      "name": "multi_file_drag_continuous_match_latest_name_count_punctuation_toggle_and_persistence",
+      "passed": true
+    },
+    {
+      "name": "sticky_single_column_header_global_disabled_controls_pause_change_and_protected_silence",
+      "passed": true
+    },
+    {
+      "name": "unordered_B_A_import_A_B_video_sources_persist_split_inherits_merge_rematches_extract_hides_reference",
+      "passed": true
+    },
+    {
+      "name": "multi_select_picker_real_file_parsing_keeps_both_sources_and_nonzero_content",
+      "passed": true
+    },
+    {
+      "name": "old_backend_empty_success_preserves_existing_scripts_and_prompts_restart",
+      "passed": true
+    }
+  ],
+  "state": {
+    "cues": [
+      {
+        "start": 0.12000000000000001,
+        "end": 0.92,
+        "text": "我们明天去公园散步",
+        "original_text": "我们明天去公圆散步",
+        "original_start": 0.1,
+        "original_end": 0.9,
+        "asr_original": {
+          "text": "我们明天去公圆散步",
+          "start": 0.1,
+          "end": 0.9,
+          "id": 1
+        },
+        "id": 1,
+        "display_id": "1",
+        "role": "",
+        "script_text": "我们明天去公园散步。",
+        "script_index": 0,
+        "match_ratio": 0.9167,
+        "confidence": null,
+        "is_noise": false,
+        "needs_review": false,
+        "match_needs_review": true,
+        "edited": true,
+        "estimated": false,
+        "source": "",
+        "words": [],
+        "reference_match": {
+          "status": "homophone",
+          "label": "疑似谐音",
+          "query_text": "我们明天去公圆散步",
+          "character_score": 0.8889,
+          "pinyin_score": 1,
+          "score": 0.9167,
+          "differences": [
+            {
+              "operation": "replace",
+              "asr_start": 6,
+              "asr_end": 7,
+              "script_start": 6,
+              "script_end": 7,
+              "asr": "圆",
+              "script": "园"
+            }
+          ],
+          "alternatives": [],
+          "reference": {
+            "text": "我们明天去公园散步。",
+            "start": 0,
+            "end": 10,
+            "paragraph_start": 1,
+            "paragraph_end": 1,
+            "line_start": 1,
+            "line_end": 1,
+            "reference_only": false,
+            "source_index": 0,
+            "source_id": "source-0",
+            "source_name": "改字回归.txt",
+            "source_range": [
+              0,
+              10
+            ],
+            "source_start": 0,
+            "source_end": 10
+          },
+          "stale": true,
+          "minimum_used": 0.64,
+          "above_high_threshold": false,
+          "group": {
+            "cue_start": 0,
+            "cue_end": 1,
+            "text": "我们明天去公园散步。",
+            "score": 0.9167
+          }
+        },
+        "modification_complete": {
+          "text": "我们明天去公园散步",
+          "start": 0.1,
+          "end": 0.9
+        },
+        "verification_stage": "align",
+        "review_decision": "manual",
+        "alignment": {
+          "engine": "fixture"
+        },
+        "interjection": false
+      }
+    ],
+    "history": 3,
+    "operation": "",
+    "jobId": null,
+    "toast": "音轨对齐完成 · 改变 1 条 · 对齐通过 1 条 · 疑似 0 条 · 明显问题 0 条",
+    "verified": 0
+  }
+}
