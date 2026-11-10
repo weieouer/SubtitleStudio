@@ -390,12 +390,12 @@ html.theme-changing, html.theme-changing * {
   height: calc(100vh - 52px); display: grid;
   grid-template-columns: var(--left-w) 6px minmax(460px, 1fr) 6px var(--right-w);
 }
-.left, .right { overflow-y: auto; padding: 12px; background: var(--panel); }
+.left, .right { overflow-y: auto; padding: 12px; background: var(--panel); scrollbar-gutter: stable; }
 .left { border-right: 1px solid var(--line); }
 .right { border-left: 1px solid var(--line); }
 .center {
   display: flex; flex-direction: column; min-width: 0;
-  min-height: 0; overflow-y: auto;
+  min-height: 0; overflow-y: auto; scrollbar-gutter: stable;
   padding: 12px; gap: 9px; background: var(--center-bg);
   box-shadow: inset 2px 0 8px color-mix(in srgb, var(--shadow) 25%, transparent), inset -2px 0 8px color-mix(in srgb, var(--shadow) 25%, transparent);
 }
@@ -422,10 +422,30 @@ body.col-resizing .center { pointer-events: none; }
 .field > select { width: 100%; height: 36px; padding: 6px 28px 6px 10px; }
 .field select { width: 100%; }
 .field .field-label { color: var(--muted); }
-.gpu-state {
-  grid-column: 2; display: flex; align-items: center; gap: 6px;
-  margin: -1px 0 2px; min-width: 0; font-size: 10.5px; line-height: 1.35; color: var(--muted-2);
+/* 环境说明放进“设备”框内，切换自动/CPU/GPU 时高度不跳动。 */
+.device-box {
+  grid-column: 2; display: flex; flex-direction: column; gap: 1px;
+  min-width: 0; padding: 2px 6px 5px; border: 1px solid var(--line-2);
+  border-radius: 8px; background: var(--field-bg);
 }
+.device-box > select,
+.device-box .model-btn {
+  height: 32px; padding: 2px 22px 2px 2px; border: 0; background: transparent;
+  box-shadow: none;
+}
+.device-box .model-btn { width: 100%; padding: 2px 2px; }
+.device-box .model-btn:hover:not(:disabled) { background: transparent; border: 0; }
+.device-box .model-btn > span { display: flex; align-items: baseline; gap: 5px; min-width: 0; overflow: hidden; }
+.device-box .device-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-2); font-size: 10.5px; font-weight: 400; }
+.device-box .device-note.ready { color: var(--green); }
+.device-box .device-note.failed { color: var(--danger-text, #e08b84); }
+.device-box:focus-within { border-color: var(--accent); }
+.gpu-state {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0; padding: 0 2px 1px; min-width: 0; font-size: 10.5px; line-height: 1.35; color: var(--muted-2);
+}
+/* 环境说明跟在“设备”选中项后面，不再单占一行。 */
+.device-box .gpu-state { display: none; }
 .gpu-state[hidden] { display: none; }
 .gpu-state .gpu-text { flex: 1; min-width: 0; }
 .gpu-state.ready .gpu-text { color: var(--green); }
@@ -1082,3 +1102,40 @@ body[data-mode="extract"] .right .cues .cue-current { grid-column: 1 / -1; }
 
 .timeline-panel { min-height: 190px; }
 .timeline-panel .wave-view { min-height: 100px; }
+/* 所有任务进度放在中间栏底部，随布局占位，不做悬浮窗。 */
+.bottom-task-dock {
+  width: 100%; flex: none; display: flex; flex-direction: column; gap: 4px;
+  min-height: 56px; padding: 6px 2px 0; border-top: 1px solid var(--line);
+  background: transparent;
+}
+.bottom-task-dock > * {
+  padding: 0; border: 0; border-radius: 0; background: transparent;
+  box-shadow: none;
+}
+.bottom-task-dock .task-progress { padding: 0; }
+.bottom-task-dock .progress { margin: 7px 0 5px; }
+.bottom-task-dock #jobMsg { min-height: 0; line-height: 1.45; }
+.bottom-task-dock .btn-row { margin-top: 3px; }
+.bottom-task-dock .btn-row:not(:has(button:not([hidden]))) { display: none; }
+.bottom-task-dock .removal-progress p { margin: 5px 0 0; }
+.bottom-task-dock .removal-progress progress { height: 8px; }
+body:not([data-mode="remove"]) .bottom-task-dock .removal-progress,
+body[data-mode="remove"] .bottom-task-dock #taskProgress { display: none; }
+.reference-settings > div > #btnVerifyAgain { grid-column: 1 / -1; margin-top: 2px; }
+#removalWorkspace, .preview-workspace { animation: studioFadeInUp .22s ease-out; }
+/* 素材、参数与右侧操作区共用任务及对比状态。 */
+.task-progress { padding: 8px 0 12px; }
+.task-progress .progress { margin-top: 8px; }
+.reference-gaps { border: 1px solid var(--red); border-radius: 8px; padding: 10px; margin: 8px 0; color: var(--red); max-height: 155px; overflow-y: auto; }
+.reference-gaps[hidden] { display: none; }
+.reference-gaps p { font-size: 11px; margin: 5px 0; }
+.reference-gaps button { display: flex; flex-direction: column; width: 100%; text-align: left; gap: 4px; padding: 7px; margin-top: 5px; border-color: var(--line); background: var(--panel); color: var(--text); }
+.reference-gaps small { color: var(--red); font-size: 10px; }
+.reference-gaps span { overflow-wrap: anywhere; white-space: pre-wrap; }
+.left .export-panel { flex: none; min-width: 0; }
+.left .export-options { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.left .subtitle-timing { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.left .subtitle-timing label { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.left .subtitle-timing input { width: 58px; min-width: 0; }
+.timing-review { margin: 5px 0; padding: 7px 0; font-size: 11px; color: var(--muted); }
+.timing-review .timing-actions { margin-top: 8px; }

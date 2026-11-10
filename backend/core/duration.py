@@ -31,8 +31,11 @@ def duration_bounds(text: str) -> tuple[int, float, float]:
     length = spoken_length(text)
     if not length:
         return 0, 0.0, 0.0
-    target = min(_MAX_TARGET, max(0.45, length * _TARGET_PER_CHAR))
-    cap = min(_MAX_CAP, max(_MIN_CAP, length * _CAP_PER_CHAR + _CAP_BASE))
+    target = max(0.45, length * _TARGET_PER_CHAR)
+    # 仅短句使用偏紧的保护；长句按字数增长，不再统一卡在 12 秒。
+    cap = max(_MIN_CAP, length * _CAP_PER_CHAR + _CAP_BASE)
+    if length > 6:
+        cap = max(cap, length * .8 + 2)
     return length, target, cap
 
 

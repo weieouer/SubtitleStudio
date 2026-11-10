@@ -7,7 +7,7 @@ const THEME_KEY = "subtitleStudio.theme";
 const MODE_LABEL = { extract: "字幕提取", align: "字幕对齐" };
 const THEMES = ["system", "light", "dark"];
 const SESSION_TOKEN = document.querySelector('meta[name="subtitle-session"]')?.content || "";
-const APP_VERSION = '3.0.0';
+const APP_VERSION = '3.1.0';
 const projectVersions = new Map();
 const projectConflicts = new Set();
 let projectSaveChain = Promise.resolve();
@@ -228,9 +228,7 @@ function displayedSubtitleText(text) {
     : wrapSubtitleText(plain, state.settings.width);
 }
 function editableCueText(text) {
-  const raw=simplifiedText(text);
-  return state.settings.keepPunc===false ? (window.SubtitleChinese?.stripPunctuation(raw) ?? raw)
-    : (window.SubtitleChinese?.normalizePunctuation(raw) ?? raw);
+  return subtitleText(text);
 }
 function mergeEditedCueText(original,edited) {
   const input=simplifiedText(edited);
@@ -434,7 +432,7 @@ function hideTip() {
 }
 
 function bindTooltips() {
-  document.addEventListener("pointerover", (e) => {
+  const scheduleTip = (e) => {
     const target = e.target.closest?.("[data-tip]");
     if (!target || target === tipHoverTarget || target === tipTarget) return;
     hideTip();
@@ -442,7 +440,10 @@ function bindTooltips() {
     tipTimer = setTimeout(() => {
       if (target.isConnected && target.matches(":hover")) showTip(target);
     }, 600);
-  });
+  };
+  // pointermove 让点击同一控件后继续悬停也能重新显示说明；pointerover 负责首次进入。
+  document.addEventListener("pointerover", scheduleTip);
+  document.addEventListener("pointermove", scheduleTip);
   document.addEventListener("pointerout", (e) => {
     const target = tipTarget || tipHoverTarget;
     if (!target) return;
@@ -696,7 +697,7 @@ function clamp(value, min, max) {
 
 function normalizeSettings() {
   const s = state.settings;
-  if(s.timingDefaultsVersion!==2){s.subtitleLead=0;s.subtitleTail=0;s.timingDefaultsVersion=2;}
+  if(s.timingDefaultsVersion!==3){s.subtitleLead=0;s.subtitleTail=0;s.subtitleMin=0;s.subtitleMax=0;s.timingDefaultsVersion=3;}
   s.mode = ['remove','align','extract'].includes(s.mode) ? s.mode : 'extract';
   s.device = ["auto", "cpu", "cuda"].includes(s.device) ? s.device : "auto";
   s.model = String(s.model || "medium");
@@ -813,7 +814,7 @@ function setMode(mode, persist = true) {
   updateButtons();
   renderSubtitleSource();
   if (persist && previous !== next && next === "align" && state.subtitleFile?.origin === "generated" && state.cues.length) {
-    toast("已带入提取的 SRT，可直接对齐；导入剧本后可用“开始校验”核对参考", "success");
+    toast("已带入提取的 SRT，可直接对齐；导入剧本后可用“对比校验”核对参考", "success");
   }
   if (persist) {
     collectSettings();
@@ -833,14 +834,16 @@ function updateModeUI() {
   zone.classList.toggle("mode-needed", align && !state.script.length && !state.scriptUploading);
   zone.setAttribute("aria-disabled", align ? "false" : "true");
   zone.tabIndex = align ? 0 : -1;
-  $("#extractActions").hidden = false;
   $('#rightModeNote').hidden = false;
-  $('#rightModeNote').textContent = state.cues.length ? '顺序：开始校验 → 校准字幕 → 对齐字幕；自动完成不代表人工确认，文字确认不覆盖时间问题。标签不自动关闭导出。点击字幕定位视频。' : '提取或导入字幕后，在这里逐条查看。';
+  $('#rightModeNote').textContent = state.cues.length ? '顺序：对比校验 → 校准字幕 → 对齐字幕；自动完成不代表人工确认，文字确认不覆盖时间问题。标签不会自动排除字幕。点击字幕定位视频。' : '提取或导入字幕后，在这里逐条查看。';
   $("#btnRealignAll").hidden = !align;
   $("#btnCalibrate").hidden = !align;
+  // 对比校验、重新识别属于字幕提取；对齐模式只保留校准与对齐两个动作。
+  $("#btnExtract").hidden = align;
+  $("#btnRerunSelected").hidden = align;
   $('#referenceSettings').hidden = !align || !state.script.length;
-  $('#btnExtract').textContent = align ? '开始校验' : '提取字幕';
-  $('#btnExtract').dataset.tip = align ? '按参考文档逐条校验字幕，只标出错误和问题，不改动字幕文字和时间。' : '提取视频或音频中的人声字幕，生成 SRT。';
+  $('#btnExtract').textContent = '提取字幕';
+  $('#btnExtract').dataset.tip = '提取视频或音频中的人声字幕，生成 SRT。';
   const clear = $("#scriptClear");
   clear.hidden = !align || (!state.script.length && !state.scriptUploading);
   clear.disabled = !align;
@@ -958,8 +961,8 @@ function applyProjectSettings(saved) {
   if (saved.device) s.device = ["auto", "cpu", "cuda"].includes(saved.device) ? saved.device : "auto";
   if (saved.model && modelIsAvailable(saved.model)) s.model = saved.model;
   for (const key of ["keepPunc", "wrapSubtitles"]) if (saved[key] != null) s[key] = !!saved[key];
-  for(const key of ['subtitleLead','subtitleTail'])s[key]=saved.timingDefaultsVersion===2 && saved[key]!=null?saved[key]:0;
-  for(const key of ['subtitleMin','subtitleMax'])if(saved[key]!=null)s[key]=saved[key];
+  for(const key of ['subtitleLead','subtitleTail','subtitleMin','subtitleMax'])s[key]=saved.timingDefaultsVersion===3 && saved[key]!=null?saved[key]:0;
+  s.timingDefaultsVersion=3;
   if (saved.wrapSubtitles == null && typeof saved.singleLine === 'boolean') s.wrapSubtitles = !saved.singleLine;
   for (const key of ['matchMinimum','matchHigh','matchPhonetic','matchAmbiguity','matchGroup']) if (saved[key] != null) s[key] = saved[key];
   if (saved.sound != null) s.sound = !!saved.sound;
@@ -1064,7 +1067,7 @@ async function loadConfig() {
     }
     if (!localStorage.getItem(SETTINGS_KEY) && cfg.settings && typeof cfg.settings === "object") {
       Object.assign(state.settings, cfg.settings);
-      if(cfg.settings.timingDefaultsVersion!==2){state.settings.subtitleLead=0;state.settings.subtitleTail=0;}
+      if(cfg.settings.timingDefaultsVersion!==3){state.settings.subtitleLead=0;state.settings.subtitleTail=0;state.settings.subtitleMin=0;state.settings.subtitleMax=0;}
       normalizeSettings();
       syncSettingsUI();
     }
@@ -1151,6 +1154,8 @@ function renderGpuState() {
   button.dataset.blocked = view.disabled ? '1' : '';
   button.disabled = view.disabled || !view.action || editLocked() || downloadBusy();
   button.dataset.tip = view.hint;
+  // 环境说明显示在“设备”选中项后面；状态变化后同步按钮文字。
+  window.SubtitleDevicePicker?.sync();
 }
 function modelActionHtml(model) {
   const installed=model.downloaded || model.available;
@@ -1224,13 +1229,19 @@ function modelAvailable() { return modelIsAvailable(state.settings.model); }
 function downloadBusy() { return ['downloading','preparing'].includes(state.modelDownload?.status); }
 function showDownloadProgress() {
   const d = state.modelDownload; if (!d || d.status === 'idle') return;
-  const ratio = Math.round((d.progress || 0) * 100);
+  if(!state.downloadActive && state.completedProgress && !downloadBusy())return;
+  const ratio = d.status==='done'?100:Math.round((d.progress || 0) * 100);
   progressBar.style.width = ratio + '%';
   progressBar.style.background = d.status === 'error' ? 'var(--red)' : 'var(--green)';
   progressBar.parentElement.classList.toggle('indeterminate', d.status === 'preparing');
   const bytes = d.total ? ' · ' + (d.downloaded / 1024**2).toFixed(0) + '/' + (d.total / 1024**2).toFixed(0) + ' MB' : '';
   const speed = d.speed_bps > 0 ? ' · ' + (d.speed_bps / 1024**2).toFixed(2) + ' MB/s' : '';
   jobMsg.textContent = d.message + (d.status === 'downloading' ? ' · ' + ratio + '%' + bytes + speed : '');
+  if(d.status==='done'){
+    state.downloadCompletedAt ||= Date.now();
+    updateJob({status:'done',progress:1,message:d.message,finished:d.finished||state.downloadCompletedAt/1000,
+      elapsed_seconds:d.elapsed??(state.downloadStartedAt?(state.downloadCompletedAt-state.downloadStartedAt)/1000:0)});
+  }
   $('#btnCancel').textContent = downloadBusy() ? '暂停下载' : '取消';
 }
 async function pollModelDownload() {
@@ -1260,6 +1271,7 @@ async function pollModelDownload() {
 async function downloadModel(name) {
   if (editLocked()) return;
   try {
+    state.downloadStartedAt=Date.now();state.downloadCompletedAt=0;state.completedProgress=null;
     state.modelDownload = (await api('/api/models/download', {model:name})).download;
     state.downloadActive = true;
     toggleModelMenu(false); toggleAuxMenu(false); showDownloadProgress(); updateButtons();
@@ -1269,11 +1281,12 @@ async function downloadModel(name) {
 async function downloadGpu() {
   if (editLocked()) return;
   try {
+    state.downloadStartedAt=Date.now();state.downloadCompletedAt=0;state.completedProgress=null;
     state.modelDownload = (await api('/api/runtime/gpu', {})).download;
     state.downloadActive = true;
     toggleModelMenu(false); toggleAuxMenu(false); showDownloadProgress(); updateButtons();
-    $('#jobMsg').scrollIntoView({block:'nearest'}); await pollModelDownload();
-  } catch(error) { toast(error.message,'error'); }
+    $('#jobMsg').scrollIntoView({block:'nearest'}); await pollModelDownload();return true;
+  } catch(error) { toast(error.message,'error');return false; }
 }
 
 async function locateModel(name) {
@@ -1390,6 +1403,7 @@ function restoredScriptNames(project) {
 async function applyScriptResult(result, sourceName = "") {
   if (!result.lines?.length) throw new Error('剧本没有可导入的内容');
   const name = sourceName.split(/[\\/]/).pop() || result.name || '剧本';
+  const sourcePath=result.path||(/[\\/]/.test(sourceName)?sourceName:'');
   const names = state.script.length ? (state.scriptNames?.length ? state.scriptNames : [state.scriptName || '剧本']) : [];
   const incoming = result.document?.text ?? result.lines.map(line => line.text).join('\n');
   const previous = state.scriptDocument?.text ?? state.script.map(line => line.text).join('\n');
@@ -1416,7 +1430,7 @@ async function applyScriptResult(result, sourceName = "") {
   state.cues.forEach(cue => { cue.reference_match = null; cue.script_text = ''; cue.script_index = null; cue.match_ratio = null; cue.match_needs_review = false; });
   state.history = []; state.redoStack = []; state.editBefore = null;
   state.scriptName = name;
-  state.scriptPath = "";
+  state.scriptPath = sourcePath;
   renderAll();
   scheduleSave();
   const stats = result.stats || {};
@@ -1453,7 +1467,8 @@ async function startScriptUpload(input) {
       state.scriptUploadName = file.name; renderScript();
       const uploaded = await uploadFile(file, "script");
       if (epoch !== state.scriptEpoch) return;
-      const result = await api("/api/script/parse", { path: uploaded.path, remove_after: true });
+      const result = await api("/api/script/parse", { path: uploaded.path, remove_after: false });
+      result.path=uploaded.path;
       if (epoch !== state.scriptEpoch) return;
       await applyScriptResult(result, file.name);
       if (epoch !== state.scriptEpoch) return;
@@ -1528,6 +1543,12 @@ async function startMediaUpload(file) {
   }
 }
 
+async function openMaterial(path,pick) {
+  if(editLocked())return;
+  if(!path){await pick();return;}
+  try{await api('/api/open_folder',{path});}catch(error){toast(error.message,'error');}
+}
+
 function bindDropzones() {
   const setup = (zone, options) => {
     zone.addEventListener("click", (event) => {
@@ -1537,7 +1558,7 @@ function bindDropzones() {
     });
     zone.addEventListener("keydown", (event) => {
       if (event.target.closest(".drop-clear")) return;
-      if (event.key !== "Enter" && event.key !== " ") return;
+      if (event.key !== "Enter") return;
       event.preventDefault();
       if (options.disabled()) return;
       options.onPick();
@@ -1566,13 +1587,13 @@ function bindDropzones() {
 
   setup($("#mediaZone"), {
     disabled: () => !!state.jobId || state.uploading || state.mediaPickerOpen,
-    onPick: pickMedia,
+    onPick: () => openMaterial(state.media?.path,pickMedia),
     onFile: startMediaUpload,
   });
   setup($("#scriptZone"), {
     disabled: () => state.settings.mode !== "align" || !!state.jobId
       || state.scriptUploading || state.scriptPickerOpen,
-    onPick: pickScript,
+    onPick: () => openMaterial(state.scriptPath,pickScript),
     onFile: startScriptUpload,
     multiple: true,
   });
@@ -1600,8 +1621,8 @@ function bindDropzones() {
     importSrt(file);
   });
   subtitleZone.addEventListener('click', event => {
-    if (event.target.closest('button') || state.settings.mode !== 'align') return;
-    importSrt();
+    if (event.target.closest('button')) return;
+    openMaterial(state.subtitleFile?.path,importSrt);
   });
 
   const swallow = (event) => {
@@ -1757,7 +1778,7 @@ async function loadMedia(path, options = {}) {
     state.cues = (project?.cues || []).map(normalizeCue);
     state.initialCues = project?.initial_cues?.map(normalizeCue) || null;
     state.selectedCues = new Set();
-    state.script = project?.script_lines || []; state.scriptName = project?.script_name || ''; state.scriptPath = '';
+    state.script = project?.script_lines || []; state.scriptName = project?.script_name || ''; state.scriptPath = project?.script_path||'';
     state.scriptNames = restoredScriptNames(project);
     state.scriptDocument = project?.script_document || null; state.referenceGaps = [];
     if (!savedProject && staged) {
@@ -1963,7 +1984,7 @@ function cueTimingIssues(cue) {
   }
   const length=(String(cue.text||'').match(/[0-9A-Za-z㐀-鿿]/g)||[]).length;
   // 与 backend/core/duration.py 的警戒值一致；只提示，不硬裁字幕。
-  const cap=Math.min(12,Math.max(1.2,length*.55+.9));
+  const cap=length<=6?Math.max(1.2,length*.55+.9):Math.max(1.2,length*.8+2);
   if(length&&cue.end-cue.start>cap+1e-6){reasons.push('字幕时间异常偏长，请试听复核');obvious=true;}
   if(cue.alignment?.stale&&!cue.alignment_error)reasons.push('对齐记录已过期，请重新对齐');
   return {reasons,obvious};
@@ -1976,10 +1997,10 @@ function cueVerificationIssues(cue, {requireReference=false, stage=null}={}) {
   const contentPhase=phase==='verify'||phase==='calibrate';
   if(cue.interjection){
     if(cue.review_decision==='included')reasons.push('整条为笑声、叹气或填充音；已手动开启导出，校准不会自动关闭');
-    else if(cue.review_decision==='non_script')reasons.push('整条为笑声、叹气或填充音；已手动关闭导出');
+    else if(cue.review_decision==='non_script')reasons.push('整条为笑声、叹气或填充音；已手动标为不导出');
     else reasons.push(state.settings.keepInterjections
       ? '整条为笑声、叹气或填充音；已开启“语气词”，校准后正常导出'
-      : '整条为笑声、叹气或填充音；关闭“语气词”，校准会直接删除此条');
+      : '整条为笑声、叹气或填充音；关闭“语气词”仅影响提取；此条由你判断后删除或保留');
     return {reasons,obvious:true};
   }
   // 内容检查（校验、校准）：只看参考文字。
@@ -2071,7 +2092,7 @@ function showVerificationReport(operation, before, after, options={}) {
   set('#reportAfterSuspect',afterStats.suspect);
   set('#reportAfterObvious',afterStats.obvious);
   const unchecked=afterStats.unchecked?` · 未校验 ${afterStats.unchecked} 条`:'';
-  set('#reportNote',`处理后：自动检查未发现异常 ${afterStats.passed} 条 · 疑似 ${afterStats.suspect} 条 · 明显问题 ${afterStats.obvious} 条${unchecked}。自动完成不代表人工确认；文字确认不会覆盖时间问题。标签不自动关闭导出。改动按处理前的字幕逐条核对，拆分或改字都会计入。`);
+  set('#reportNote',`处理后：自动检查未发现异常 ${afterStats.passed} 条 · 疑似 ${afterStats.suspect} 条 · 明显问题 ${afterStats.obvious} 条${unchecked}。自动完成不代表人工确认；文字确认不会覆盖时间问题。标签不会自动排除字幕。改动按处理前的字幕逐条核对，拆分或改字都会计入。`);
   const dialog=$('#verificationReportDialog');
   if(dialog&&typeof dialog.showModal==='function'){
     try{if(!dialog.open)dialog.showModal();}catch(error){}
@@ -2200,7 +2221,17 @@ function badgesHtml(cue) {
   return out.join("") || '<span class="badge">—</span>';
 }
 
+function renderReferenceGaps() {
+  const panel=$('#referenceGaps');if(!panel)return;
+  const gaps=state.referenceGaps||[];
+  panel.hidden=state.settings.mode!=='align'||!gaps.length;
+  panel.innerHTML='<b>疑似漏句 · '+gaps.length+' 处</b><p>参考有、字幕未覆盖；请试听确认，不会自动插入。</p>'+gaps.map(g=>
+    '<button type="button" data-gap-cue="'+g.after_cue+'"><small>#'+(g.after_cue+1)+' 与 #'+(g.before_cue+1)+' 之间 · '+escapeHtml(g.source_name||'参考')+'</small><span>'+escapeHtml(subtitleText(g.text))+'</span></button>').join('');
+  panel.onclick=event=>{const button=event.target.closest('[data-gap-cue]');if(button&&state.cues[Number(button.dataset.gapCue)])selectCue(Number(button.dataset.gapCue));};
+}
+
 function renderTable() {
+  renderReferenceGaps();
   const previousVerificationCache = verificationCache;
   verificationCache = new Map();
   try {
@@ -2326,7 +2357,7 @@ function updateOverlay() {
     const row = document.querySelector(`#cueBody tr[data-i="${idx}"]`);
     if (row) row.classList.add("playing");
     const editing=cueBody.contains(document.activeElement) && document.activeElement.matches('input,[contenteditable="true"]');
-    if (row && $('#waveFollow').checked && index !== state.playingIndex && Date.now() >= state.listScrollPauseUntil && !editing) {
+    if (row && index !== state.playingIndex && Date.now() >= state.listScrollPauseUntil && !editing) {
       const list = row.closest('.table-wrap'), rr = row.getBoundingClientRect(), lr = list.getBoundingClientRect();
       if (rr.top < lr.top || rr.bottom > lr.bottom) list.scrollTop += rr.top - lr.top - Math.max(8,(lr.height-rr.height)/3);
     }
@@ -2423,115 +2454,58 @@ function findCueAt(t, includeExcluded = false) {
 
 function canAdoptCue(cue) {
   const match=cue?.reference_match;
-  return !!(cue?.script_text && match?.reference && !match.stale && !match.reference.reference_only
+  const source=match?.reference?.text||cue?.script_text;
+  return !!(source && match?.reference && !match.stale && !match.reference.reference_only
     && (match.query_text==null || match.query_text===cue.text)
     && (match.status!=='ambiguous' || match.candidate_confirmed)
-    && simplifiedText(cue.script_text)!==cue.text);
+    && simplifiedText(source)!==cue.text);
 }
 
 function adoptCue(cue) {
-  cue.text=simplifiedText(cue.script_text);cue.words=[];cue.edited=true;
+  cue.text=simplifiedText(cue.reference_match?.reference?.text||cue.script_text);cue.words=[];cue.edited=true;
   delete cue.merge_suggestion;
   delete cue.interjection;
   cue.review_decision='adopted';cue.match_needs_review=false;
-  cue.reference_match={...cue.reference_match,stale:true};
+  cue.reference_match={...cue.reference_match,status:'high',label:'参考一致',query_text:cue.text,stale:false,differences:[]};
   if(cue.alignment)cue.alignment={...cue.alignment,stale:true};
   completeModification(cue);
 }
 
 async function calibrateAll() {
-  if (editLocked()) return;
+  if(editLocked())return;
   const selected=selectedCueIndices();
   const indices=selected.length?selected:state.cues.map((cue,i)=>i);
   if(!indices.length)return;
-  const before=snapshot(),path=projectPath(),epoch=state.mediaEpoch,previous=state.operation;
-  const beforeCues=state.cues.map(cue=>JSON.parse(JSON.stringify(cue)));
-  const initialHistory=state.history.slice();
-  state.operation='一键校准';updateButtons();
+  if(!state.script.length){toast('请先导入参考文本并执行对比校验','info');return;}
+  if(state.versionMismatch){toast('请先保存并重启后台，再执行新版校准','error');return;}
+  const before=snapshot(),beforeCues=JSON.parse(JSON.stringify(state.cues));
+  const path=projectPath(),epoch=state.mediaEpoch,started=Date.now(),previous=state.operation;
+  state.operation='校准字幕';updateButtons();
   try{
-    if(!state.script.length){
-      indices.forEach(i=>markNoReference(state.cues[i]));
-      toast('没有参考内容，已标出所选条目，未改动字幕文字','info');return;
+    const result=await api('/api/segment',{mode:'calibration',cues:indices.map(i=>state.cues[i]),
+      max_width:state.settings.width||20,gap_seconds:state.settings.gap??.6,
+      keep_punc:state.settings.keepPunc!==false,keep_interjections:state.settings.keepInterjections===true});
+    if(!sameDocument(path,epoch,before))throw new Error('字幕已变化，已保留当前修改，请重新校准');
+    if(result.mode!=='reference_copy'||!Array.isArray(result.cues)||result.cues.length!==indices.length)
+      throw new Error('后台未启用文字校准接口，请保存并重启程序；未采用旧版拆条结果');
+    const all=state.cues.slice(),completed=new Set(result.completed_indices||[]);
+    for(let offset=0;offset<indices.length;offset++){
+      const original=state.cues[indices[offset]],next=result.cues[offset];
+      if(next.start!==original.start||next.end!==original.end||(original.id!=null&&next.id!==original.id))
+        throw new Error('校准返回了结构或时间变化，已拒绝采用，请重启后台');
+      all[indices[offset]]={...original,...next};
+      if(completed.has(offset))completeModification(all[indices[offset]]);
     }
-    const stale=indices.filter(i=>{const c=state.cues[i],m=c.reference_match;return !m||m.stale||m.query_text!==c.text;});
-    if(stale.length && !await rematchDerivedCues(stale,{preserveModification:true}))return;
-    if(projectPath()!==path||state.mediaEpoch!==epoch)return;
-    const referenceFixes={missing:0,extra:0};
-    for(const i of indices){
-      const cue=state.cues[i],match=cue.reference_match;
-      const correctable=['high','typo','homophone','missing','extra'].includes(match?.status)||(match?.status==='ambiguous'&&match.candidate_confirmed);
-      if(correctable&&canAdoptCue(cue)){
-        if(match?.status==='missing')referenceFixes.missing++;
-        else if(match?.status==='extra')referenceFixes.extra++;
-        adoptCue(cue);
-      }
-    }
-    const layout=await normalizeCalibrationLayout(indices);
-    const targets=layout.indices;
-    // 校准只按参考和字数整理内容与分段，不碰音轨；时间留给最后“对齐字幕”按音源重算。
-    if(targets.length)await rematchDerivedCues(targets,{preserveModification:false});
-    targets.forEach(i=>{if(state.cues[i])state.cues[i].verification_stage='calibrate';});
-    const restored=releaseVerificationExclusions(state.cues,targets);
-    if(selected.length)state.selectedCues=new Set(targets);
-    const report=showVerificationReport('校准',beforeCues,state.cues,{requireReference:state.script.length>0});
-    const merged=layout.merged ?? 0;
-    const suggestions=layout.merge_suggestions ?? 0;
-    const referenceHint=(referenceFixes.missing||referenceFixes.extra)
-      ? ` · 其中按参考补全 ${referenceFixes.missing} 条、删除 ${referenceFixes.extra} 条`:'';
-    const interjectionHint=[
-      layout.interjection_removed?`语气词去除 ${layout.interjection_removed} 条`:'',
-      layout.interjection_trimmed?`句首句末语气词清理 ${layout.interjection_trimmed} 条`:'',
-      layout.interjection_restored?`语气词恢复导出 ${layout.interjection_restored} 条`:''
-    ].filter(Boolean).join(' · ');
-    const restoredHint=restored?` · 解除旧自动排除 ${restored} 条`:'';
-    const mergeHint=merged?` · 同一句自动合并 ${merged} 处`:'';
-    const hint=suggestions?` · ${suggestions} 处红色“建议合并”请勾选相邻字幕后手动合并`:'';
-    toast(`校准完成 · 改变 ${report.changed} 条${referenceHint} · 分句 ${layout.splits} 处${mergeHint}${interjectionHint?' · '+interjectionHint:''} · 已校准 ${report.after.passed} 条 · 疑似 ${report.after.suspect} 条 · 明显问题 ${report.after.obvious} 条${restoredHint}${hint} · 未涉及音轨，时间留给对齐字幕`,'success',9000);
-  }catch(error){
-    toast(error.message,'error',7000);
-  }finally{
+    state.cues=all;
+    showVerificationReport('校准',beforeCues,state.cues,{requireReference:true});
+    updateJob({status:'done',progress:1,message:'校准完成',finished:Date.now()/1000,elapsed_seconds:(Date.now()-started)/1000});
+    toast(`按对应参考修正 ${result.changed_indices?.length||0} 条 · ${result.pending_indices?.length||0} 条待复核 · 条目、时间与删除结果保留；下一步可执行对齐字幕`,'success',9000);
+  }catch(error){toast(error.message,'error',9000);}
+  finally{
     state.operation=previous;
-    if(projectPath()===path&&state.mediaEpoch===epoch&&snapshot()!==before){state.history=initialHistory;pushHistory(before);scheduleSave();}
+    if(projectPath()===path&&state.mediaEpoch===epoch&&snapshot()!==before){pushHistory(before);scheduleSave();}
     renderAll();updateOverlay();updateButtons();
   }
-}
-
-async function normalizeCalibrationLayout(indices) {
-  const before=snapshot(),path=projectPath(),epoch=state.mediaEpoch;
-  const groups=[];
-  for(const i of [...new Set(indices)].sort((a,b)=>a-b)){
-    const last=groups.at(-1);
-    if(last&&last.at(-1)+1===i&&last.length<5000)last.push(i);else groups.push([i]);
-  }
-  const staged=[];let merged=0,suggestions=0,splits=0,interjectionRemoved=0,interjectionTrimmed=0,interjectionRestored=0;
-  for(const group of groups){
-    const result=await api('/api/segment',{mode:'calibration',cues:group.map(i=>state.cues[i]),
-      max_width:state.settings.width,gap_seconds:state.settings.gap??.6,keep_punc:state.settings.keepPunc!==false,
-      keep_interjections:state.settings.keepInterjections===true});
-    if(!sameDocument(path,epoch,before))throw new Error('字幕已变化，已保留当前内容');
-    if(result.mode!=='calibration'||!Array.isArray(result.cues)||!Array.isArray(result.changed_indices))
-      throw new Error('后台尚未启用校准整理接口，请保存工程并重启程序后再试');
-    const modified=new Set(result.completed_indices??result.changed_indices);
-    result.cues.forEach((cue,i)=>{if(modified.has(i))completeModification(cue);});
-    staged.push({group,cues:result.cues});merged+=result.merged??0;suggestions+=result.merge_suggestions??0;splits+=result.splits;
-    interjectionRemoved+=result.interjection_removed??0;
-    interjectionTrimmed+=result.interjection_trimmed??0;
-    interjectionRestored+=result.interjection_restored??0;
-  }
-  const all=[],targets=[];let cursor=0;
-  for(const {group,cues} of staged){
-    all.push(...state.cues.slice(cursor,group[0]));
-    targets.push(...cues.map((cue,i)=>all.length+i));all.push(...cues);cursor=group.at(-1)+1;
-  }
-  all.push(...state.cues.slice(cursor));
-  if(JSON.stringify(all)!==JSON.stringify(state.cues)){
-    const selected=state.selectedCues.size>0;
-    state.cues=all.map(normalizeCue);
-    state.selectedCues=new Set(selected?targets:[]);state.selected=selected?(targets[0]??-1):-1;
-  }
-  return {indices:targets,merged,merge_suggestions:suggestions,splits,
-    interjection_removed:interjectionRemoved,interjection_trimmed:interjectionTrimmed,
-    interjection_restored:interjectionRestored};
 }
 
 function markNoReference(cue) {
@@ -2584,7 +2558,7 @@ function waveWindow() {
 }
 
 function followTimeline() {
-  if (!$('#waveFollow').checked || video.paused) return;
+  if (video.paused) return;
   const view = waveWindow(), now = video.currentTime || 0;
   if (!view.duration || view.span >= view.duration) return;
   if (now < view.start || now > view.start + view.span * .85) {
@@ -2645,10 +2619,8 @@ function bindTimelineLayout() {
     const pan=e.target,view=waveWindow();
     if(!view.duration || Math.abs(pan.scrollLeft-(pan._syncedLeft || 0))<1)return;
     state.waveStart=clamp(pan.scrollLeft/Math.max(1,pan.clientWidth)*view.span,0,Math.max(0,view.duration-view.span));
-    $('#waveFollow').checked=false;
     requestWaveDetail();
   });
-  $('#waveFollow').addEventListener('change',()=>{followTimeline();drawWave();});
   $('.right .table-wrap').addEventListener('wheel',()=>{state.listScrollPauseUntil=Date.now()+2500;},{passive:true});
   waveCanvas.addEventListener('wheel',e=>{
     const view=waveWindow();if(!view.duration)return;
@@ -2659,7 +2631,6 @@ function bindTimelineLayout() {
       state.waveStart=clamp(anchor-state.waveSpan*ratio,0,Math.max(0,view.duration-state.waveSpan));
     } else {
       state.waveStart=clamp(view.start+(e.deltaX||e.deltaY)*view.span/Math.max(1,waveCanvas.clientWidth),0,Math.max(0,view.duration-view.span));
-      $('#waveFollow').checked=false;
     }
     requestWaveDetail();
   },{passive:false});
@@ -2945,18 +2916,8 @@ async function startAsr(task = 'asr', region = null, options = {}) {
         nextCues=nextCues.map(c=>({...c,previous_asr:original.asr_original,
           exclude_export:cueExcluded(c)||manualExcluded,
           review_decision:manualExcluded?'non_script':(c.review_decision||'pending')}));
-        if(state.script.length && s.mode==='align'){
-          const doc=state.scriptDocument || {text:state.script.map(p=>p.text).join('\n')};
-          const previous=state.cues.slice(0,region.index).reverse().find(c=>c.reference_match?.reference && !c.reference_match.stale);
-          const next=state.cues.slice(region.index+1).find(c=>c.reference_match?.reference && !c.reference_match.stale);
-          try{
-            const left=previous?.reference_match.reference,right=next?.reference_match.reference;
-            const position_bounds=left&&right&&left.source_id===right.source_id&&left.end<=right.start?[left.end,right.start]:undefined;
-            const checked=await runReferenceMatch({cues:nextCues,document:doc,lines:[],position_bounds,
-              options:{minimum:s.matchMinimum,high:s.matchHigh,phonetic:s.matchPhonetic,ambiguity:s.matchAmbiguity,max_group:s.matchGroup}});
-            nextCues=checked.cues;
-          }catch(error){toast('本段已识别，剧本校验未完成：'+error.message,'error');}
-        }
+        nextCues=nextCues.map(c=>({...c,script_text:original.script_text||'',
+          reference_match:original.reference_match?{...original.reference_match,stale:true}:undefined}));
         if(!sameDocument(path,mediaEpoch,before))throw new Error('字幕已变化，已保留当前内容，请重新处理本段');
         const all=state.cues.slice();all.splice(region.index,1,...nextCues);nextCues=all;
       }
@@ -2964,9 +2925,9 @@ async function startAsr(task = 'asr', region = null, options = {}) {
         subtitleFile: task === 'align' || region ? state.subtitleFile : job.subtitle_path ? { path: job.subtitle_path, origin: 'generated' } : null });
       if(task === 'asr' && !region) state.initialCues=JSON.parse(JSON.stringify(state.cues));
       renderSubtitleSource(true);
-      if (task === 'asr' && s.mode === 'align' && state.script.length) await matchScript(true);
+
       if (!(await saveProject(false))) throw new Error('识别已完成，工程保存失败，请先保存或导出');
-      jobMsg.textContent='完成 · 用时 '+formatElapsed(Date.now()-taskStarted);
+      updateJob({status:'done',progress:1,message:'完成',finished:Date.now()/1000,elapsed_seconds:(Date.now()-taskStarted)/1000});
       if(!options.deferCompletionSound)playSound('success');
       toast(region ? '本段重识别完成，其余字幕已保留' : (task === 'align' ? '时间轴对齐完成：' : '提取成功：') + state.cues.length + ' 条字幕', 'success');
       const hallucinated = job.info?.hallucination?.count || 0;
@@ -3023,7 +2984,7 @@ async function verifyOnly() {
   if (!state.cues.length) { toast('请先导入字幕', 'error'); return; }
   if (!state.script.length) { toast('请先导入参考文档', 'error'); return; }
   const taskStarted = Date.now();
-  if (await matchScript()) jobMsg.textContent = '校验完成 · 用时 ' + formatElapsed(Date.now() - taskStarted);
+  if (await matchScript()) updateJob({status:'done',progress:1,message:'对比校验完成',finished:Date.now()/1000,elapsed_seconds:(Date.now()-taskStarted)/1000});
 }
 
 async function alignAndVerify() {
@@ -3040,7 +3001,7 @@ async function alignAndVerify() {
   renderAll();updateOverlay();updateButtons();scheduleSave();
   const report=showVerificationReport('对齐',beforeCues,state.cues,{requireReference:state.script.length>0});
   playSound('success');
-  jobMsg.textContent='完成 · 用时 '+formatElapsed(Date.now()-taskStarted);
+  updateJob({status:'done',progress:1,message:'对齐完成',finished:Date.now()/1000,elapsed_seconds:(Date.now()-taskStarted)/1000});
   const gapSplits=Number(job.info?.gap_splits)||0,widthSplits=Number(job.info?.width_splits)||0;
   const durationRepairs=Number(job.info?.duration_repairs?.length)||0;
   const parts=[];
@@ -3059,10 +3020,13 @@ function formatElapsed(milliseconds) {
 
 function updateJob(job) {
   progressBar.parentElement.classList.remove('indeterminate');
-  const pct = Math.round((job.progress || 0) * 100);
+  const pct = job.status==='done'?100:Math.round(clamp(Number(job.progress)||0,0,1)*100);
   progressBar.style.width = `${pct}%`;
   const seconds=job.elapsed_seconds ?? (job.finished && job.started ? Math.max(0,job.finished-job.started):null);
-  jobMsg.textContent = (job.message || job.status)+(job.status==='done' && seconds!=null?' · 用时 '+formatElapsed(seconds*1000):'');
+  const finished=job.finished?new Date(job.finished*1000):new Date();
+  jobMsg.textContent = (job.message || job.status)+(job.status==='done'
+    ?' · 完成于 '+finished.toLocaleTimeString('zh-CN',{hour12:false})+(seconds!=null?' · 用时 '+formatElapsed(seconds*1000):''):'');
+  if(job.status==='done')state.completedProgress=jobMsg.textContent;
   if (job.status === "error") progressBar.style.background = "var(--red)";
   else if (job.status === "done") progressBar.style.background = "var(--green)";
   else progressBar.style.background = "var(--accent)";
@@ -3083,7 +3047,7 @@ async function rerunSelected() {
   const indices=selectedCueIndices();
   if(!indices.length || !state.media || !modelAvailable())return;
   const targets=indices.slice().reverse().map(index=>({index,start:state.cues[index].start,end:state.cues[index].end}));
-  const before=snapshot(),history=state.history.slice(),path=projectPath(),epoch=state.mediaEpoch;
+  const before=snapshot(),history=state.history.slice(),path=projectPath(),epoch=state.mediaEpoch,started=Date.now();
   let done=0;
   state.batchRecognition=true;state.batchCancelRequested=false;updateButtons();
   try {
@@ -3100,7 +3064,9 @@ async function rerunSelected() {
       state.history=history;pushHistory(before);scheduleSave();
     }
     updateButtons();
-    jobMsg.textContent=`重识别${done===targets.length?'完成':state.batchCancelRequested?'已取消':'已停止'} · ${done}/${targets.length} 条`;
+    updateJob({status:done===targets.length?'done':state.batchCancelRequested?'cancelled':'error',progress:done/targets.length,
+      message:`重识别${done===targets.length?'完成':state.batchCancelRequested?'已取消':'已停止'} · ${done}/${targets.length} 条`,
+      finished:Date.now()/1000,elapsed_seconds:(Date.now()-started)/1000});
     if(done===targets.length)playSound('success');
   }
 }
@@ -3491,7 +3457,7 @@ async function saveProject(silent = false, options = {}) {
   clearTimeout(state.saveTimer);
   const revision = state.editRevision;
   const payload = JSON.parse(JSON.stringify({ media_path: state.media?.path || '', source_path: source,
-    cues: state.cues, initial_cues: state.initialCues, script_lines: state.script, script_name: state.scriptName || '', script_names: state.scriptNames || [], script_document: state.scriptDocument,
+    cues: state.cues, initial_cues: state.initialCues, script_lines: state.script, script_name: state.scriptName || '', script_names: state.scriptNames || [], script_document: state.scriptDocument, script_path:state.scriptPath||'',
     subtitle_file: state.subtitleFile, settings: collectSettings() }));
   state.pendingSaves++;
   if (!silent) setSaveState('保存中…');
@@ -3532,7 +3498,7 @@ async function resolveProjectConflict() {
     await projectSaveChain;
     const payload = {source_path:source, media_path:state.media?.path || '', cues:state.cues,
       initial_cues:state.initialCues, script_lines:state.script, script_name:state.scriptName,
-      script_names:state.scriptNames, script_document:state.scriptDocument,
+      script_names:state.scriptNames, script_document:state.scriptDocument,script_path:state.scriptPath||'',
       subtitle_file:state.subtitleFile, settings:collectSettings()};
     const backup = await api('/api/projects/backup', payload);
     const loaded = await api('/api/projects/load?path='+encodeURIComponent(source)), p = loaded.project;
@@ -3595,7 +3561,7 @@ async function openSavedProject(source) {
     if(!p)throw new Error('项目记录不存在');
     video.pause();video.removeAttribute('src');video.load();$('#videoEmpty').hidden=false;
     state.mediaEpoch++;state.media=null;state.srtPath=source;state.waveform=null;resetWaveDetail();state.waveSpan=0;state.waveStart=0;
-    state.script=p.script_lines || [];state.scriptDocument=p.script_document || null;state.scriptName=p.script_name || '';state.scriptPath='';
+    state.script=p.script_lines || [];state.scriptDocument=p.script_document || null;state.scriptName=p.script_name || '';state.scriptPath=p.script_path||'';
     state.scriptNames=restoredScriptNames(p);
     state.initialCues=p.initial_cues?.map(normalizeCue) || null;
     state.referenceGaps=[];state.pendingResult=null;state.playingIndex=-1;
@@ -3628,8 +3594,6 @@ function updateButtons() {
   $('#btnSegment').disabled=locked||!single;
   $('#btnMerge').disabled=locked||!contiguousSelection(indices);
   $('#selectedCueLabel').textContent=indices.length===1?'选中 #'+single.display_id:indices.length?'已选 '+indices.length+' 条':'请选择字幕';
-  $('#btnExcludeSelected').disabled=locked||!indices.length;
-  $('#btnExcludeSelected').textContent=indices.length&&indices.every(i=>cueExcluded(state.cues[i]))?'开启导出':'关闭导出';
   $('#btnRerunSelected').disabled=locked||!indices.length||!state.media||!modelAvailable();
   $('#btnAddCue').disabled = locked || (!state.media && !hasCues);
   $('#btnDelete').disabled = locked || !indices.length;
@@ -3643,7 +3607,6 @@ function updateButtons() {
     : !state.media || !modelAvailable());
   $('#btnCancel').disabled = !state.jobId && !state.matchRequest && !state.batchRecognition && !downloadBusy();
   $('#btnCancel').hidden = !state.jobId && !state.matchRequest && !state.batchRecognition && !downloadBusy();
-  $('#btnOpenFolder').disabled = !state.media || state.uploading || state.loading;
   $('#mediaClear').disabled = !!(state.jobId || state.submitting || state.operation || state.loading);
   $('#scriptClear').disabled = locked;
   $('#btnUseResult').hidden = !state.pendingResult || state.pendingResult.path !== projectPath();
@@ -3655,7 +3618,7 @@ function updateButtons() {
   $('#vadCheck').disabled = locked || align;
   $('#vadCheck').closest('label').dataset.tip = align ? '仅人声用于字幕提取；音轨对齐按当前字幕处理，此模式下不适用。' : '提取前检测人声区间，不改变原音频；边界判断自动估计底噪，轻声对白仍保留供模型识别。';
   $('#keepInterjections').disabled = locked;
-  $('#keepInterjections').closest('label').dataset.tip = '开启后保留笑声、叹气、咂嘴和单独的“啊、哈哈、嗯？”等整条语气词，校准后正常导出；关闭时提取和校准会直接删除这些条目，并去掉句首、句末的“啊、呀、哎、唉”等语气词。参考中没有的语气词也会去掉；句中“你呀，就是……”这类语气词不受影响。';
+  $('#keepInterjections').closest('label').dataset.tip = '仅控制提取阶段是否保留语气词；对比、校准和对齐不自动删除已有字幕。';
   $('#subtitleMin').max=String(state.settings.subtitleMax>0?Math.min(10,state.settings.subtitleMax):10);
   for (const id of ['matchMinimum','matchHigh','matchPhonetic','matchAmbiguity','matchGroup']) $('#' + id).disabled = locked;
   $('#modelBtn').disabled = locked || !state.models.length;
@@ -3674,9 +3637,26 @@ function updateButtons() {
   cueBody.querySelectorAll('button').forEach(button => { button.disabled = locked; });
   $('#mediaZone').setAttribute('aria-disabled', locked ? 'true' : 'false');
   $('#scriptZone').setAttribute('aria-disabled', locked || !align ? 'true' : 'false');
+  window.SubtitleComparison?.maybePrompt();
+}
+
+function handlePlaybackShortcut(event) {
+  if(event.code!=='Space'&&event.key!==' ')return;
+  if(event.isComposing||event.ctrlKey||event.metaKey||event.altKey)return;
+  const target=event.target;
+  const type=String(target?.type||'').toLowerCase();
+  const editing=target?.isContentEditable||['TEXTAREA'].includes(target?.tagName)
+    ||(target?.tagName==='INPUT'&&!['checkbox','radio','range','button','submit','reset'].includes(type));
+  if(editing)return;
+  event.preventDefault();event.stopImmediatePropagation();
+  if(event.repeat)return;
+  const player=state.settings.mode==='remove'?$('#removalVideo'):video;
+  if(!player)return;
+  if(player.paused)player.play().catch(()=>{});else player.pause();
 }
 
 function bindEvents() {
+  document.addEventListener('keydown',handlePlaybackShortcut,true);
   $('#btnPreviewTiming').addEventListener('click',()=>{
     if(editLocked())return;
     state.timingPreview=!state.timingPreview;updateButtons();updateOverlay();drawWave();
@@ -3727,11 +3707,6 @@ function bindEvents() {
     $("#helpDialog").showModal();
   });
   $("#btnOpenTerminal").addEventListener("click", openTerminal);
-  $("#btnOpenFolder").addEventListener("click", async () => {
-    if (!state.media) return;
-    try { await api("/api/open_folder", { path: state.media.path }); }
-    catch (e) { toast(e.message, "error"); }
-  });
   $("#btnExtract").addEventListener("click", () => state.settings.mode === 'align' ? verifyOnly() : startAsr());
   $("#btnCancel").addEventListener("click", async () => {
     if (state.matchRequest) await cancelReferenceMatch();
@@ -3758,6 +3733,7 @@ function bindEvents() {
   });
   $("#btnRealignAll").addEventListener("click",alignAndVerify);
   $("#btnCalibrate").addEventListener("click", () => calibrateAll());
+  $("#btnVerifyAgain")?.addEventListener("click", () => verifyOnly());
   $("#waveZoomIn").addEventListener("click", () => {
     const view = waveWindow(); if (!view.duration) return;
     state.waveSpan = Math.max(.5, view.span / 2); state.waveStart = Math.max(0, (video.currentTime || 0) - state.waveSpan / 2); requestWaveDetail();
@@ -3774,7 +3750,6 @@ function bindEvents() {
   $("#btnUndo").addEventListener("click", undo);
   $('#btnReset').addEventListener('click',resetCues);
   $('#selectAllCues').addEventListener('change',e=>selectAllCues(e.target.checked));
-  $('#btnExcludeSelected').addEventListener('click',toggleSelectedExport);
   $('#btnRerunSelected').addEventListener('click',rerunSelected);
   $('#btnExport').addEventListener('click',showExportOptions);
   $('#btnConfirmExport').addEventListener('click',()=>{$('#exportDialog').close();exportSrt(false,$('#exportFormat').value);});
@@ -4046,7 +4021,7 @@ function bindEvents() {
       pushHistory(before); renderAll(); scheduleSave();
     } else if (!e.target.closest('details,button,input,[contenteditable="true"]') && !e.ctrlKey && !e.metaKey) { focusWave(cue); }
   });
-  cueBody.addEventListener('keydown', e => { if (e.target.matches('.script-line') && ['Enter',' '].includes(e.key)) { e.preventDefault(); selectCue(Number(e.target.dataset.i)); } });
+  cueBody.addEventListener('keydown', e => { if (e.target.matches('.script-line') && e.key==='Enter') { e.preventDefault(); selectCue(Number(e.target.dataset.i)); } });
   for (const key of ['matchMinimum','matchHigh','matchPhonetic','matchAmbiguity','matchGroup']) {
     $('#' + key).addEventListener('change', commitSettings);
   }

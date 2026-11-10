@@ -330,8 +330,10 @@ class ReferenceIndex:
         raw_end = self.positions[end - 1][1]
         sid=max(0,bisect_right(self.source_starts,raw_start)-1)
         source=self.sources[sid]
+        while raw_start > source['start'] and self.raw[raw_start-1] in '“‘「『（("':
+            raw_start -= 1
         # 带回紧随片段的句末标点；不跨越引号、角色标签或下一个句子。
-        while raw_end < source['end'] and self.raw[raw_end] in "，。！？!?；;…":
+        while raw_end < source['end'] and self.raw[raw_end] in '，。！？!?；;…%％‰”’」』）)"':
             raw_end += 1
         pstart = max(0, bisect_right(self.starts, raw_start) - 1)
         pend = max(pstart, bisect_right(self.starts, max(raw_start, raw_end - 1)) - 1)
@@ -763,10 +765,10 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
     ordered = sorted(positions.items())
     for (previous_ci, previous), (ci, current) in zip(ordered, ordered[1:]):
         a, b = previous[1], current[0]
-        if previous[4]['source_index']==current[4]['source_index'] and 2 <= b - a <= 80:
+        if previous[4]['source_index']==current[4]['source_index'] and 2 <= b - a:
             span = index.describe(a, b)
             gaps.append({**span, "after_cue": previous_ci, "before_cue": ci,
-                         "label": "未覆盖剧本片段，仅供人工核查，可能为叙述或实际台词差异"})
+                         "label": "疑似漏句：参考中存在但字幕未覆盖，请试听确认；不会自动插入", "severity": "error"})
     elapsed=time.perf_counter()-started
     check(1, '校验完成')
     log.info('参考校验 chars=%d cues=%d index_cache=%s index_seconds=%.4f total_seconds=%.4f candidate_queries=%d',

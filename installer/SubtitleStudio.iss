@@ -59,13 +59,24 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
+#if Edition == "full"
+Name: "{group}\{#AppName}"; Filename: "{app}\runtime\python\pythonw.exe"; Parameters: "-I ""{app}\backend\launch.py"""; WorkingDir: "{app}"; IconFilename: "{app}\frontend\assets\studio-film.ico"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\runtime\python\pythonw.exe"; Parameters: "-I ""{app}\backend\launch.py"""; WorkingDir: "{app}"; IconFilename: "{app}\frontend\assets\studio-film.ico"; Tasks: desktopicon
+#else
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\frontend\assets\studio-film.ico"
+#endif
 Name: "{group}\首次使用说明"; Filename: "{app}\首次使用说明.txt"
 Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
+#if Edition != "full"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\frontend\assets\studio-film.ico"; Tasks: desktopicon
+#endif
 
 [Run]
+#if Edition == "full"
+Filename: "{app}\runtime\python\pythonw.exe"; Parameters: "-I ""{app}\backend\launch.py"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+#else
 Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+#endif
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.venv"

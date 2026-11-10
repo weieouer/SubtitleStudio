@@ -12,6 +12,10 @@ import time
 from urllib.request import Request, urlopen
 
 ROOT=Path(__file__).resolve().parents[1]
+if (ROOT / 'runtime/manifest.json').is_file():
+    for _name in ('PYTHONHOME', 'PYTHONPATH', 'VIRTUAL_ENV'):
+        os.environ.pop(_name, None)
+    os.environ['PYTHONNOUSERSITE'] = '1'
 ERROR_FILE=ROOT/'data/logs/startup-error.txt'
 STATE_FILE=ROOT/'data/run/instance.json'
 

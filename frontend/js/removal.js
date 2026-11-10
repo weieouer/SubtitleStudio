@@ -62,6 +62,8 @@ function removalFrameBox(width, height, videoWidth, videoHeight) {
     for(const id of ['removalChoose','removalQuality','removalFormat','removalFolder','removalDevice','removalFullRange','removalX','removalY','removalW','removalH','removalStart','removalEnd'])find(id).disabled=locked;
     find('removalUseCurrent').hidden=!(state.media?.width&&state.media?.height);
     find('removalUseCurrent').disabled=locked;
+    find('removalChange').hidden=!r.info;
+    find('removalChange').disabled=locked;
     find('removalDraw').disabled=locked||!r.info||r.view!=='original';
     find('removalClear').disabled=locked||!r.region;
     find('removalDraw').textContent=r.selecting?'正在框选 · 拖动画面':r.region?'调整或重新框选':'框选字幕区域';
@@ -76,7 +78,7 @@ function removalFrameBox(width, height, videoWidth, videoHeight) {
     find('removalSegments').querySelectorAll('input,button').forEach(element=>{element.disabled=locked;});
     find('removalRangeSummary').textContent=r.info?`处理范围 · ${Number(find('removalStart').value).toFixed(1)}–${Number(find('removalEnd').value).toFixed(1)} 秒`:'处理范围 · 全片';
     find('removalInstall').disabled=locked||r.installing||!!state.versionMismatch;
-    find('removalInstall').textContent=ready?'重新准备环境':'下载并准备模型';
+    find('removalInstall').textContent=ready?'检查模型':'下载模型';
     find('removalCancelInstall').hidden=!r.installing;
     find('removalModelBadge').textContent=ready?(r.model.cuda_available?'GPU 已就绪':'CPU 已就绪'):r.installing?'正在准备':'未准备';
     find('removalViewResult').disabled=!r.preview;
@@ -87,6 +89,7 @@ function removalFrameBox(width, height, videoWidth, videoHeight) {
     find('removalEmpty').hidden=!!r.info;
     find('removalReconnect').hidden=!r.detached;
     paint();
+    window.SubtitlePickers?.syncAll();
     updateButtons();
   }
 
@@ -211,6 +214,9 @@ function removalFrameBox(width, height, videoWidth, videoHeight) {
       if(!['queued','running'].includes(job.status)){
         r.job=null;
         if(job.status==='done'){
+          find('removalProgress').value=1;
+          find('removalJobStatus').textContent=(job.message||'处理完成')+' · 完成于 '+new Date((job.finished||Date.now()/1000)*1000).toLocaleTimeString('zh-CN',{hour12:false});
+          find('removalJobDetail').textContent='用时 '+formatElapsed((job.elapsed||0)*1000);
           if(job.request.preview){if(key===signature()){r.preview=job;r.previewKey=key;showView('result');}}
           else r.result=job;
           find('removalResult').hidden=false;
@@ -232,11 +238,20 @@ function removalFrameBox(width, height, videoWidth, videoHeight) {
     r.polling=true;
     try {
       const response=await api('/api/removal/models');r.model=response.model;
-      r.installing=['downloading','preparing'].includes(response.installation.status);
-      if(!r.deviceChosen&&!r.installing){find('removalDevice').value=r.model.cuda_available?'cuda':r.model.nvidia_available?'cuda':'cpu';}
-      const installation=response.installation;
+      const installation=r.gpuPreparing&&response.gpu_installation?response.gpu_installation:response.installation;
+      r.installing=['downloading','preparing'].includes(installation.status);
+    if(!r.deviceChosen&&!r.installing){find('removalDevice').value=r.model.cuda_available?'cuda':'cpu';}
+      if(r.gpuPreparing&&!r.job&&!r.scanning){
+        find('removalProgress').value=installation.status==='done'?1:installation.progress||0;
+        find('removalJobStatus').textContent=installation.message||'配置 GPU 运行库…';
+        if(['done','error','cancelled'].includes(installation.status)){
+          if(installation.status==='done')find('removalJobStatus').textContent+=' · 完成于 '+new Date((installation.finished||Date.now()/1000)*1000).toLocaleTimeString('zh-CN',{hour12:false});
+          find('removalJobDetail').textContent=installation.error||'用时 '+formatElapsed((installation.elapsed||0)*1000);
+          r.gpuPreparing=false;
+        }
+      }
       find('removalInstallStatus').textContent=installation.status==='error'?'准备失败：'+String(installation.error).slice(-160)
-        :r.installing?installation.message:r.model.available?'模型与独立环境已就绪':'首次准备需要下载权重和推理依赖';
+        :r.installing?installation.message:r.model.available?'模型与运行环境已就绪':'下载模型权重；GPU 加速可按需一键配置';
       find('removalInstallStatus').title=installation.error||'';
       refresh();
     }catch(error){find('removalInstallStatus').textContent='模型状态暂不可用：'+error.message;}
@@ -277,7 +292,8 @@ function removalFrameBox(width, height, videoWidth, videoHeight) {
     if(r.info){find('removalStart').value=clip(Number(find('removalStart').value)||0,0,r.info.duration);find('removalEnd').value=clip(Number(find('removalEnd').value)||0,0,r.info.duration);}
     invalidate();
   });
-  find('removalChoose').addEventListener('click',choose);
+  find('removalChoose').addEventListener('click',()=>openMaterial(r.info?.path,choose));
+  find('removalChange').addEventListener('click',choose);
   find('removalUseCurrent').addEventListener('click',()=>state.media?.path&&load(state.media.path));
   find('removalDraw').addEventListener('click',()=>{if(busy())return;r.selecting=!r.selecting;player.pause();refresh();});
   find('removalClear').addEventListener('click',()=>{if(busy())return;remember();r.region=null;r.selecting=true;invalidate();});
@@ -293,7 +309,7 @@ function removalFrameBox(width, height, videoWidth, videoHeight) {
     try{await api('/api/removal/models/install',{device:find('removalDevice').value});await modelPoll();}
     catch(error){r.installing=false;toast(error.message,'error');refresh();}
   });
-  find('removalCancelInstall').addEventListener('click',async()=>{try{await api('/api/removal/models/cancel',{});}catch(error){toast(error.message,'error');}});
+  find('removalCancelInstall').addEventListener('click',async()=>{try{await api(r.gpuPreparing&&r.model?.bundled?'/api/models/cancel':'/api/removal/models/cancel',{});}catch(error){toast(error.message,'error');}});
   find('removalCancelJob').addEventListener('click',async()=>{if(!r.job&&!r.scanning)return;try{await api(r.scanning?'/api/removal/scan/cancel':'/api/removal/jobs/'+r.job.id+'/cancel',r.scanning?{scan_id:r.scanId}:{});find('removalJobStatus').textContent='正在取消…';}catch(error){toast(error.message,'error');}});
   find('removalAddSegment').addEventListener('click',()=>{
     if(busy()||!r.info)return;
@@ -336,6 +352,8 @@ function removalFrameBox(width, height, videoWidth, videoHeight) {
       }
       const scan=response.scan;find('removalJobStatus').textContent=scan.message;
       if(scan.status==='done'){
+        find('removalProgress').value=1;
+        find('removalJobStatus').textContent=scan.message+' · 完成于 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});
         remember();
         r.segments=[...(r.segments||[]).filter(s=>s.source==='manual'),...scan.segments].sort((a,b)=>a.start-b.start);
         r.scanBinding=binding;renderSegments();invalidate();
@@ -373,6 +391,17 @@ function removalFrameBox(width, height, videoWidth, videoHeight) {
       invalidate();
     }
   }
-  window.SubtitleRemoval={activate,busy,load,save,handleKey,frameBox:removalFrameBox};
+  async function prepareGpu() {
+    if(busy()||r.installing)return;
+    r.gpuPreparing=true;r.deviceChosen=true;
+    if(r.model?.bundled){
+      const started=await downloadGpu();
+      if(!started){r.gpuPreparing=false;return;}
+      await modelPoll();
+    }else{
+      find('removalDevice').value='cuda';find('removalInstall').click();
+    }
+  }
+  window.SubtitleRemoval={activate,busy,load,save,handleKey,prepareGpu,frameBox:removalFrameBox};
   activate(state.settings.mode==='remove');
 })();

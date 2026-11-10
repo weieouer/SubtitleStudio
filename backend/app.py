@@ -61,7 +61,7 @@ WEB_DIR = FRONTEND_DIR
 OUTPUT_DIR = OUTPUTS_DIR
 PROJECT_DIR = PROJECTS_DIR
 
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 STARTED_AT = time.time()
 SESSION_TOKEN = secrets.token_urlsafe(32)
 DIALOG_LOCK = threading.Lock()
@@ -410,7 +410,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/models/download":
                 self.send_json({"ok": True, "download": DOWNLOADS.get()})
             elif path == '/api/removal/models':
-                self.send_json({'ok': True, 'model': removal_model_status(), 'installation': REMOVAL_INSTALLER.get()})
+                gpu_download = DOWNLOADS.get()
+                self.send_json({'ok': True, 'model': removal_model_status(), 'installation': REMOVAL_INSTALLER.get(),
+                                'gpu_installation': gpu_download if gpu_download.get('model') == 'gpu' else None})
             elif path == '/api/removal/scan':
                 scan = REMOVAL_SCANNER.get(_qget(query, 'id', ''))
                 self.send_json({'ok': scan is not None, 'scan': scan}, 200 if scan else 404)
@@ -937,6 +939,7 @@ class Handler(BaseHTTPRequestHandler):
             "media_identity": _media_identity(media_path) if media.is_media(media_path) else '',
             "script_lines": validation.lines(body.get("script_lines", [])),
             "script_name": str(body.get("script_name") or ""),
+            "script_path": str(body.get("script_path") or ""),
             "script_names": validation.script_names(body.get("script_names", [])),
             "script_document": script_document,
             "subtitle_file": validation.mapping(body.get("subtitle_file") or {}, "subtitle_file"),

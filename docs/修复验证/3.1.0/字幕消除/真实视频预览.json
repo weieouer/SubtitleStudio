@@ -1,0 +1,59 @@
+{
+  "scope": "真实 640×268 视频底部字幕条的 4 秒预览；CPU；复核原崩溃场景（首窗口 20 帧）",
+  "source": {
+    "width": 640,
+    "height": 268,
+    "fps": 24.0,
+    "duration_seconds": 1419.5
+  },
+  "region": {
+    "x": 0.1842,
+    "y": 0.8566,
+    "width": 0.6478,
+    "height": 0.0929
+  },
+  "max_edge": 512,
+  "processing_size": [
+    512,
+    128
+  ],
+  "crop": [
+    65,
+    138,
+    585,
+    268
+  ],
+  "frames": 96,
+  "repaired_frames": 49,
+  "unchanged_frames_before_encoding": 47,
+  "seconds": 357.6,
+  "all_passed": true,
+  "before": "同一请求在 512×88 处理尺寸下，RAFT 相关金字塔末级仅有 1 像素，采样除以 0 产生全 NaN 光流；NaN 偏移进入 deform_conv2d 触发访问冲突，进程退出码 139，日志停在 Processing: frames [20 frames]...",
+  "fix": "crop_geometry 保证处理尺寸每条边不低于 128：优先在原片内上下/左右扩边，画面本身不足时再放大；光流出现非有限值时显式报错，不再让 deform_conv2d 崩溃。",
+  "checks": [
+    {
+      "name": "previously_crashing_window_completes",
+      "passed": true
+    },
+    {
+      "name": "all_frames_decoded_and_encoded",
+      "passed": true
+    },
+    {
+      "name": "subtitle_text_removed_in_preview_frame",
+      "passed": true
+    },
+    {
+      "name": "pixels_outside_region_stay_close_to_source",
+      "passed": true
+    }
+  ],
+  "outside_region_mean_difference": 1.97,
+  "note": "仅验证崩溃修复与预览可用；4 秒预览不等于长片画质、GPU 速度或复杂背景验收",
+  "guard_recheck": {
+    "scope": "同一视频 1 秒预览，复核光流非有限值保护",
+    "frames": 24,
+    "repaired_frames": 18,
+    "all_passed": true
+  }
+}

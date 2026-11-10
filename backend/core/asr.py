@@ -94,6 +94,8 @@ def _cuda_runtime_ok() -> bool:
     import ctypes
     import ctypes.util
     import os
+    from .bundled_runtime import configure_cuda_libraries
+    configure_cuda_libraries()
     if os.name == "nt":
         for name in ("cublas64_12.dll", "cublas64_11.dll"):
             try:

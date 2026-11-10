@@ -22,16 +22,39 @@ def write_json(path, value):
     os.replace(temporary, path)
 
 
+# RAFT 的相关金字塔最小时只剩 1 像素，采样时除以 0 得到 NaN；
+# 全部为 NaN 的偏移再进入 deform_conv2d 会触发访问冲突（整个任务直接崩溃）。
+# 因此处理尺寸的每条边都不能低于 128，必要时先在原片内扩边，画面本身不足时再放大。
+REPAIR_MIN_EDGE = 128
+
+
+def _expand_span(lo, hi, needed, limit):
+    """在 [0, limit] 内把区间扩到 needed，尽量保持原中心；画面不够时取满整条边。"""
+    if hi - lo >= needed:
+        return lo, hi
+    if limit <= needed:
+        return 0, limit
+    extra = needed - (hi - lo)
+    lo = max(0, lo - extra // 2)
+    hi = min(limit, lo + needed)
+    return max(0, hi - needed), hi
+
+
 def crop_geometry(width, height, region, max_edge):
     x0, y0 = math.floor(region['x'] * width), math.floor(region['y'] * height)
     x1 = min(width, math.ceil((region['x'] + region['width']) * width))
     y1 = min(height, math.ceil((region['y'] + region['height']) * height))
     margin = max(32, (y1 - y0) * 2)
-    crop = (max(0, x0 - margin), max(0, y0 - margin), min(width, x1 + margin), min(height, y1 + margin))
+    crop = [max(0, x0 - margin), max(0, y0 - margin), min(width, x1 + margin), min(height, y1 + margin)]
+    scale = min(1, max_edge / max(crop[2] - crop[0], crop[3] - crop[1]))
+    needed = math.ceil(REPAIR_MIN_EDGE / scale)
+    crop[0], crop[2] = _expand_span(crop[0], crop[2], needed, width)
+    crop[1], crop[3] = _expand_span(crop[1], crop[3], needed, height)
     cw, ch = crop[2] - crop[0], crop[3] - crop[1]
     scale = min(1, max_edge / max(cw, ch))
-    size = (max(64, int(cw * scale) // 8 * 8), max(64, int(ch * scale) // 8 * 8))
-    return (x0, y0, x1, y1), crop, size
+    size = (max(REPAIR_MIN_EDGE, int(cw * scale) // 8 * 8),
+            max(REPAIR_MIN_EDGE, int(ch * scale) // 8 * 8))
+    return (x0, y0, x1, y1), tuple(crop), size
 
 
 def active_at(request, stamp):
@@ -127,7 +150,22 @@ class ProPainter:
 
     def cached_model(self, name, factory):
         if name not in self.models:
-            self.models[name] = factory()
+            model = factory()
+            if name in ('raft', 'flow'):
+                # 光流出现 NaN 时 deform_conv2d 会越界写入并让整个进程崩溃；
+                # 在此显式失败，让任务面板给出可读错误而不是“处理失败”后无日志。
+                original = model.forward
+
+                def checked(*args, **kwargs):
+                    result = original(*args, **kwargs)
+                    values = [value for value in (result if isinstance(result, tuple) else (result,))
+                              if isinstance(value, self.torch.Tensor)]
+                    if not all(self.torch.isfinite(value).all() for value in values):
+                        raise RuntimeError('光流计算出现无效数值，请缩小框选区域后重试；必要时改用 GPU')
+                    return result
+
+                model.forward = checked
+            self.models[name] = model
         return self.models[name]
 
     def process(self, arrays, active, geometry):

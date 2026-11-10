@@ -303,6 +303,20 @@ def main(arguments=None, *, setup_only=False):
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     _log_file = BOOT_LOG.open('w', encoding='utf-8', errors='replace')
     try:
+        bundled = ROOT / 'runtime/manifest.json'
+        if bundled.is_file():
+            info = json.loads(bundled.read_text(encoding='utf-8'))
+            if not info.get('ready') or not RUNTIME.is_file():
+                raise RuntimeError('内置运行环境不完整，请重新安装完整程序包')
+            for name in DATA_DIRS:
+                (ROOT / name).mkdir(parents=True, exist_ok=True)
+            if setup_only:
+                log('内置运行环境已就绪，无需安装依赖')
+                return 0
+            environment = {key: value for key, value in os.environ.items() if key not in ('PYTHONHOME','PYTHONPATH','VIRTUAL_ENV')}
+            environment.update(PYTHONNOUSERSITE='1', PYTHONUTF8='1')
+            return subprocess.call([str(RUNTIME), str(LAUNCH), *(sys.argv[1:] if arguments is None else arguments)],
+                                   cwd=ROOT, env=environment)
         log('字幕工作室 · 启动检查')
         log('-' * 60)
         for step in (step_runtime, step_venv, step_pip,

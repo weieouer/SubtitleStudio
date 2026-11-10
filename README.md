@@ -1,6 +1,6 @@
 # 字幕工作室
 
-本地字幕消除、提取、剧本参考校准与音轨对齐工具。当前开发版本 3.0.0，分支 `feature/subtitle-removal`；2.3.5 保存在 `main` / `v2.3.5`。主要面向中文素材，支持视频修复输出及 SRT / MKV 字幕导出。
+本地字幕消除、提取、剧本参考校准与音轨对齐工具。当前版本 3.1.0；3.0.0 与 2.3.5 的提交、标签和安装包保留。主要面向中文素材，支持视频修复输出及 SRT / MKV 字幕导出。
 
 ## 开发与运行
 
@@ -11,7 +11,7 @@ Windows x64，使用本机 Python 3.13。根目录只有一个入口 `main.py`�
 ```powershell
 py main.py setup                         # 首次配置或更新项目依赖
 py main.py                               # 日常启动，Ctrl+C 停止
-py main.py build                         # 构建在线 EXE 安装包，默认输出 dist/online
+py main.py build                         # 构建完整 EXE 安装包（依赖内置），默认输出 dist/full
 ```
 
 默认虚拟环境：项目根目录的 `.venv/`，在文件树中正常显示。依赖只安装到项目环境；运行时自动使用该解释器，不重复安装。用 `--venv <目录>` 或 `SUBTITLESTUDIO_DEV_VENV` 指定其他环境。
@@ -68,14 +68,14 @@ SubtitleStudio/
 
 ## 发布
 
-`py main.py build` 默认构建在线 EXE 安装包，输出 `dist/online/SubtitleStudio-Setup-<版本>-x64-online.exe`。安装包只带后端、前端、便携 Python 和启动所需文件，不含 wheels、模型、引擎、缓存和日志；首次启动联网安装依赖，不需要预装 Python 或 VSCode。
+`py main.py build` 默认构建完整 EXE 安装包，输出 `dist/full/SubtitleStudio-Setup-<版本>-x64-full.exe`。构建期由 `tools/prepare_runtime.py` 准备便携 Python、Qwen/FireRed/ProPainter 共用推理环境和 ProPainter SDK，安装后直接启动，不在用户电脑运行 pip；模型仍由界面按需下载。不含模型权重、缓存和日志，不需要预装 Python 或 VSCode。
 
 - `py main.py build --output <目录>` 指定输出目录；不覆盖已有安装包。
 - `py main.py build --stage-only` 只准备安装文件，不编译 EXE。
-- 离线版：`runtime\python\python.exe installer\build_installer.py --offline`（含 wheels，约 116 MB）。
+- 旧在线/离线版：`runtime\python\python.exe installer\build_installer.py` / `--offline`（可选，首次启动联网或使用 wheels 安装依赖）。
 - 旧便携 ZIP 工具仍保留在 `tools/package_release.py`，不再是默认构建路径。
 
-安装包按当前用户安装到 `%LOCALAPPDATA%\Programs\Subtitle Studio`，不需要管理员权限。安装后从桌面或开始菜单快捷方式启动；首次启动的进度显示在控制台，依赖和模型准备见包内《首次使用说明》。仍需 Windows x64 和 Chrome/Edge，GPU 驱动由目标电脑提供。
+安装包按当前用户安装到 `%LOCALAPPDATA%\Programs\Subtitle Studio`，不需要管理员权限。安装后从桌面或开始菜单快捷方式启动；完整版直接使用内置运行库，GPU 与模型准备见包内《首次使用说明》。仍需 Windows x64 和 Chrome/Edge，GPU 驱动由目标电脑提供。构建细节见 [打包与首次启动](docs/打包与首次启动.md)。
 
 ## 排错与维护
 

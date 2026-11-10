@@ -1,0 +1,54 @@
+{
+  "scope": "真实媒体与隔离浏览器；模型接口替身，不验证真实修复效果",
+  "checks": [
+    {
+      "name": "removal_mode_is_first_and_keeps_existing_modes",
+      "passed": true
+    },
+    {
+      "name": "empty_removal_workspace_has_clear_disabled_actions",
+      "passed": true
+    },
+    {
+      "name": "pointer_selection_maps_to_real_video_pixels",
+      "passed": true
+    },
+    {
+      "name": "manual_time_segment_enables_selected_processing",
+      "passed": true
+    },
+    {
+      "name": "short_preview_and_full_output_are_distinct",
+      "passed": true
+    },
+    {
+      "name": "changing_parameters_invalidates_stale_preview",
+      "passed": true
+    },
+    {
+      "name": "full_output_does_not_replace_subtitle_editing_state",
+      "passed": true
+    },
+    {
+      "name": "cancel_uses_current_job_and_restores_controls",
+      "passed": true
+    },
+    {
+      "name": "real_full_video_text_scan_preserves_manual_segments",
+      "passed": true
+    },
+    {
+      "name": "time_rows_support_edit_save_and_explicit_export_scope",
+      "passed": true
+    },
+    {
+      "name": "three_viewports_keep_tabs_and_workspace_in_bounds",
+      "passed": true
+    },
+    {
+      "name": "switching_back_preserves_previous_subtitle_state",
+      "passed": true
+    }
+  ],
+  "all_passed": true
+}

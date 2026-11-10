@@ -19,17 +19,8 @@
   }
   // 与srt_io.normalize_subtitle_punctuation一致，数字/英文词内部的符号保持原样。
   function normalizePunctuation(value) {
-    const chars=[...String(value??'').replace(/\.{3,}|…+|⋯+/g,'……')],out=[];
-    for(let i=0;i<chars.length;i++){
-      const char=chars[i],previous=chars[i-1]||'',following=chars[i+1]||'';
-      const internal=('.,:/'.includes(char)&&/\d/.test(previous)&&/\d/.test(following))
-        ||("-'’".includes(char)&&/[A-Za-z0-9]/.test(previous)&&/[A-Za-z0-9]/.test(following));
-      const unit='%％‰'.includes(char)&&/\d/.test(previous);
-      if(internal||unit||! /\p{P}/u.test(char))out.push(char);
-      else if(char==='…')out.push(char);
-      else if('？！?!'.includes(char))out.push('？?'.includes(char)?'？':'！');
-    }
-    return out.join('').trim();
+    // 开启时保留参考本来的标点；不开启则走 stripPunctuation。
+    return String(value ?? '').trim();
   }
   window.SubtitleChinese = {toSimplified(value) {
     const text=String(value ?? '');

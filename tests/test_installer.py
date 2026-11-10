@@ -76,17 +76,17 @@ class InstallerTests(unittest.TestCase):
                 installer.stage_release(stage, offline=False)
             self.assertFalse((stage / 'wheels').exists())
 
-    def test_main_build_defaults_to_online_installer(self):
-        with patch.object(release, 'build_installer', return_value={'edition': 'online'}) as build, \
+    def test_main_build_defaults_to_full_installer(self):
+        with patch.object(release, 'build_installer', return_value={'edition': 'full'}) as build, \
                 redirect_stdout(io.StringIO()):
             self.assertEqual(main.main(['build', '--stage-only']), 0)
-            self.assertEqual(build.call_args.args[0], ROOT / 'dist/online')
+            self.assertEqual(build.call_args.args[0], ROOT / 'dist/full')
             self.assertTrue(build.call_args.kwargs['stage_only'])
 
     def test_installer_build_preserves_existing_executable(self):
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder)
-            artifact = output / 'SubtitleStudio-Setup-test-x64-online.exe'
+            artifact = output / 'SubtitleStudio-Setup-test-x64-full.exe'
             artifact.write_bytes(b'existing')
             with patch.object(installer, 'app_version', return_value='test'), \
                     patch.object(release, 'validate_environment', return_value=Path(sys.executable)), \

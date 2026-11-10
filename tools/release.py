@@ -1,7 +1,8 @@
-"""发布构建：默认在线 EXE 安装包，旧便携 ZIP 工具保留。"""
+"""发布构建：默认完整 EXE 安装包（依赖内置、仅模型按需下载），旧便携 ZIP 工具保留。"""
 from __future__ import annotations
 
 import subprocess
+import json
 from pathlib import Path
 
 from .development import process_environment, validate_environment
@@ -13,22 +14,31 @@ def build_installer(output: Path, environment: Path, *, iscc: Path | None = None
 
     python = validate_environment(environment)
     output = output.resolve()
-    executable = output / f'SubtitleStudio-Setup-{app_version()}-x64-online.exe'
+    executable = output / f'SubtitleStudio-Setup-{app_version()}-x64-full.exe'
     if not stage_only and executable.exists():
         raise FileExistsError(f'安装包已存在，请指定其他输出目录：{executable}')
-    command = [str(python), str(ROOT / 'installer/build_installer.py'), '--output', str(output)]
+    prepared = ROOT / 'installer/build/prepared-runtime/manifest.json'
+    from .prepare_runtime import runtime_key
+    try:
+        ready = json.loads(prepared.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        ready = {}
+    if not (ready.get('ready') and ready.get('torch_flavor') == 'cpu' and ready.get('dependency_sha256') == runtime_key()):
+        subprocess.run([str(python), str(ROOT / 'tools/prepare_runtime.py')], cwd=ROOT,
+                       env=process_environment(environment), check=True)
+    command = [str(python), str(ROOT / 'installer/build_installer.py'), '--full', '--output', str(output)]
     if iscc:
         command += ['--iscc', str(iscc)]
     if stage_only:
         command.append('--stage-only')
     subprocess.run(command, cwd=ROOT, env=process_environment(environment), check=True)
     if stage_only:
-        return {'stage': str(ROOT / 'installer/build/stage-online'), 'edition': 'online',
-                'first_start_downloads_dependencies': True}
+        return {'stage': str(ROOT / 'installer/build/stage-full'), 'edition': 'full',
+                'first_start_downloads_dependencies': False}
     if not executable.is_file():
         raise RuntimeError(f'未生成预期安装包：{executable}')
-    return {'installer': str(executable), 'bytes': executable.stat().st_size, 'edition': 'online',
-            'first_start_downloads_dependencies': True}
+    return {'installer': str(executable), 'bytes': executable.stat().st_size, 'edition': 'full',
+            'first_start_downloads_dependencies': False}
 
 
 def build_portable(output: Path, environment: Path, *, include_work=False) -> dict:

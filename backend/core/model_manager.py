@@ -242,6 +242,10 @@ def set_model_location(name, directory):
 
 
 def runtime_python(engine):
+    from .bundled_runtime import python_for
+    bundled = python_for(engine)
+    if bundled:
+        return bundled
     return ENGINE_DIR / engine / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
@@ -282,6 +286,11 @@ def desired_torch():
 
 def ready_marker(engine):
     """读取引擎环境的 ready.json；不存在或损坏时返回空字典。"""
+    from .bundled_runtime import cuda_available, manifest, python_for
+    if python_for(engine):
+        from .bundled_runtime import gpu_python
+        return {'engine': engine, 'torch': 'cuda' if gpu_python() else manifest().get('torch_flavor', 'cpu'),
+                'cuda_available': cuda_available(), 'bundled': True}
     try:
         data = json.loads((ENGINE_DIR / engine / "ready.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -291,7 +300,8 @@ def ready_marker(engine):
 
 def engine_prepared(engine):
     """引擎的独立环境是否已经创建并完成依赖自检。"""
-    return runtime_python(engine).is_file() and (ENGINE_DIR / engine / "ready.json").is_file()
+    from .bundled_runtime import python_for
+    return bool(python_for(engine)) or runtime_python(engine).is_file() and (ENGINE_DIR / engine / "ready.json").is_file()
 
 
 def engine_gpu_ready(engine):
@@ -300,9 +310,15 @@ def engine_gpu_ready(engine):
 
 
 def runtime_ready(engine):
+    from .bundled_runtime import manifest, python_for
+    if engine in manifest().get('engines', []):
+        return bool(python_for(engine))
     if engine in ("whisper", "builtin"):
         return True
     location = ENGINE_DIR / engine
+    from .bundled_runtime import stale_venv_home
+    if stale_venv_home(location):
+        return False
     if not (runtime_python(engine).is_file() and (location / "ready.json").is_file()):
         return False
     # 要求 CUDA 版 PyTorch 时，旧的 CPU 环境视为未就绪，下次下载会重装 torch。
@@ -455,6 +471,9 @@ class ModelDownloads:
 
     def update(self, **changes):
         with self.lock:
+            if changes.get('status') in ('done', 'error', 'cancelled'):
+                changes['finished'] = time.time()
+                changes['elapsed'] = max(0, changes['finished'] - self.started_at) if self.started_at else 0
             self.status.update(changes)
         if self.on_progress and changes.get('message'):
             self.on_progress(.02, changes['message'])
@@ -687,6 +706,11 @@ class ModelDownloads:
         atomic_json(path, marker)
 
     def _prepare(self, engine):
+        from .bundled_runtime import manifest
+        if manifest() and engine not in ('builtin', 'whisper'):
+            if not runtime_ready(engine):
+                raise RuntimeError('内置运行库不完整，请重新安装完整程序包；安装版不会在线安装依赖')
+            return
         if runtime_ready(engine):
             return
         with self.lock:
@@ -697,6 +721,8 @@ class ModelDownloads:
                                  open_window=False)
         self.update(status="preparing", progress=.9, message="模型已下载，正在准备独立识别环境…")
         location = ENGINE_DIR / engine
+        from .bundled_runtime import stale_venv_home
+        relocated = stale_venv_home(location)
         venv.EnvBuilder(with_pip=True).create(location)
         self.check()
         spec = engine_spec(engine)
@@ -706,6 +732,12 @@ class ModelDownloads:
                        'PYTHONUNBUFFERED': '1',
                        'PIP_CACHE_DIR': str(pip_cache_directory()),
                        'PIP_DISABLE_PIP_VERSION_CHECK': '1'}
+        if relocated and self._probe_engine(engine, environment):
+            available = self._torch_state(engine, environment)
+            atomic_json(location / 'ready.json', {'engine': engine, 'packages': packages,
+                        'torch': 'cuda' if available else 'cpu', 'cuda_available': available, 'relocated': True,
+                        'prepared': time.time()})
+            return
         log = location / "install.log"
         torch = engine_config()["torch"]
         torch_flavor, cuda_available, gpu_error = "cpu", None, ""
@@ -763,6 +795,17 @@ class ModelDownloads:
         atomic_json(location / "ready.json", marker)
 
     def start_gpu(self):
+        from .bundled_runtime import manifest
+        if manifest():
+            with self.lock:
+                if self.status['status'] in ('downloading', 'preparing'):
+                    raise ValueError('请先完成或取消当前下载')
+                self.cancel_event = threading.Event()
+                self.started_at = time.time()
+                self.status = {'status': 'preparing', 'model': 'gpu', 'progress': 0,
+                               'message': '准备独立 GPU 环境，CPU 环境保留…', 'error': ''}
+                threading.Thread(target=self._run_bundled_gpu, daemon=True, name='gpu-runtime').start()
+                return self.get()
         """按需给已建好的引擎环境补装 CUDA 版 PyTorch；不在下载模型时自动触发。"""
         with self.lock:
             if self.status["status"] in ("downloading", "preparing"):
@@ -780,6 +823,59 @@ class ModelDownloads:
             threading.Thread(target=self._run_gpu, args=(engines,), daemon=True,
                              name="gpu-download").start()
             return self.get()
+
+    def _run_bundled_gpu(self):
+        from .bundled_runtime import gpu_python, manifest
+        location = ENGINE_DIR / 'gpu'
+        try:
+            if gpu_python():
+                self.update(status='done', progress=1, message='GPU 运行库已配置，无需重复下载；驱动由电脑提供')
+                return
+            source = ROOT_DIR / 'runtime' / Path(manifest()['ml']).parent
+            if location.exists():
+                resolved = location.resolve()
+                if location.is_symlink() or not resolved.is_relative_to(ENGINE_DIR.resolve()) or resolved == ENGINE_DIR.resolve():
+                    raise ValueError('GPU 临时环境目录不合法，原目录保留')
+                old_log = location / 'install.log'
+                if old_log.is_file():
+                    log_archive = ROOT_DIR / 'data/logs/gpu-install-previous.log'
+                    log_archive.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(old_log, log_archive)
+                shutil.rmtree(resolved)
+            location.mkdir(parents=True, exist_ok=True)
+            self.check()
+            shutil.copytree(source, location, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+            self.check()
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith('PIP_') and key not in ('PYTHONHOME', 'PYTHONPATH', 'VIRTUAL_ENV')}
+            environment.update(PYTHONUTF8='1', PYTHONUNBUFFERED='1', PYTHONNOUSERSITE='1',
+                               PIP_CONFIG_FILE=os.devnull, PIP_CACHE_DIR=str(pip_cache_directory()))
+            python = location / 'python.exe'
+            command = [str(python), '-m', 'pip', 'install', '--no-input', '--no-deps',
+                       '--disable-pip-version-check', '--progress-bar', 'on', '--timeout', '120', '--retries', '3',
+                       '--index-url', 'https://download.pytorch.org/whl/cu126',
+                       'torch==2.9.1+cu126', 'torchvision==0.24.1+cu126', 'torchaudio==2.9.1+cu126']
+            self.update(status='preparing', progress=.1, message='下载并配置 GPU 运行库，约 2.6 GB；CPU 环境保留…')
+            with (location / 'install.log').open('a', encoding='utf-8') as log:
+                if self._install(command, log, environment):
+                    raise RuntimeError('GPU 配置未完成，可重试；CPU 内置环境仍可使用。日志：' + str(location / 'install.log'))
+            self.check()
+            probe = subprocess.run([str(python), '-c',
+                'import torch,torchvision,torchaudio; from qwen_asr import Qwen3ForcedAligner; print(int(torch.cuda.is_available()))'],
+                env=environment, capture_output=True, text=True, timeout=120,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+            if probe.returncode:
+                raise RuntimeError('GPU 环境自检失败，CPU 环境保留：' + probe.stderr[-1200:])
+            available = probe.stdout.strip() == '1'
+            atomic_json(location / 'ready.json', {'torch': 'cuda', 'cuda_available': available,
+                                                 'packages': ['torch==2.9.1+cu126'], 'prepared': time.time()})
+            self.update(status='done', progress=1, message='GPU 环境已就绪' if available else
+                        'GPU 运行库已安装，显卡驱动尚不可用；可继续使用 CPU')
+        except DownloadCancelled:
+            self.update(status='cancelled', message='GPU 配置已取消，CPU 环境保留')
+        except Exception as error:
+            self.update(status='error', error=str(error), message=str(error))
 
     def _run_gpu(self, engines):
         try:

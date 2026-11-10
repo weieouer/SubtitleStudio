@@ -270,17 +270,21 @@ class HttpTests(unittest.TestCase):
                 if header == "bytes=-100":
                     self.assertEqual(raw, self.binary.read_bytes()[-100:])
 
-    def test_calibration_layout_api_preserves_time_and_rejects_invalid_gap(self):
-        body = {'mode': 'calibration', 'cues': [cue('中', 0, .2), cue('毒的人', .2, 1)],
+    def test_calibration_api_copies_reference_only_and_rejects_invalid_gap(self):
+        matched = cue('中毒的人', .2, 1)
+        matched['reference_match'] = {
+            'status': 'typo', 'query_text': '中毒的人',
+            'reference': {'text': '中毒的人。', 'source_id': 'A', 'start': 0, 'end': 5}}
+        body = {'mode': 'calibration', 'cues': [cue('中', 0, .2), matched],
                 'max_width': 10, 'gap_seconds': .4}
         status, result = self.json_request('POST', '/api/segment', body)
         self.assertEqual(status, 200)
-        self.assertEqual(result['mode'], 'calibration')
-        self.assertEqual([c['text'] for c in result['cues']], ['中', '毒的人'])
+        self.assertEqual(result['mode'], 'reference_copy')
+        self.assertEqual([c['text'] for c in result['cues']], ['中', '中毒的人。'])
         self.assertEqual((result['cues'][0]['start'], result['cues'][0]['end']), (0, .2))
-        self.assertEqual(result['changed_indices'], [])
-        self.assertEqual(result['merge_suggestions'], 1)
-        self.assertEqual(result['cues'][0]['merge_suggestion']['direction'], 'next')
+        self.assertEqual(result['changed_indices'], [1])
+        self.assertEqual(result['completed_indices'], [1])
+        self.assertEqual(result['merge_suggestions'], 0)
         body['gap_seconds'] = -1
         self.assertEqual(self.request('POST', '/api/segment', body)[0], 400)
 

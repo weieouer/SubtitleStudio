@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 import zipfile
@@ -24,6 +25,14 @@ REQUIRED = ('run.bat', 'backend/app.py', 'backend/launch.py', 'frontend/index.ht
             'runtime/python/Lib/ensurepip/__init__.py')
 PRUNE = {'__pycache__', '.venv', '.git', 'site-packages'}
 FORBIDDEN = ('data/models/', 'data/engines/', 'data/cache/', 'data/run/', 'data/logs/')
+
+
+def app_version() -> str:
+    match = re.search(r'^VERSION\s*=\s*["\']([^"\']+)',
+                      (ROOT / 'backend' / 'app.py').read_text(encoding='utf-8'), re.MULTILINE)
+    if not match:
+        raise SystemExit('无法从 backend/app.py 读取 VERSION')
+    return match.group(1)
 
 
 def selected_files(root: Path, include_work: bool):
@@ -106,7 +115,7 @@ def package(output: Path, include_work=False, allow_online=False):
                    '缺失时才联网；在模型菜单下载所需模型。')
     else:
         restore = '解压整个目录后双击 run.bat；首次启动需要联网安装依赖，在模型菜单下载所需模型。'
-    manifest = {'format': 1, 'application_version': '3.0.0', 'platform': 'Windows x64',
+    manifest = {'format': 1, 'application_version': app_version(), 'platform': 'Windows x64',
                 'include_work': include_work, 'entrypoint': 'run.bat',
                 'offline_install': bool(wheels),
                 'offline_wheels': {'count': len(wheels),

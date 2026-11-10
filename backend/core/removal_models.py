@@ -6,20 +6,24 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import threading
+import time
+import urllib.error
 import urllib.request
 import venv
 import zipfile
 from contextlib import contextmanager
 from pathlib import PurePosixPath
 
+from . import bundled_runtime
 from .paths import CONFIG_DIR, DATA_DIR, MODELS_DIR
 from .storage import atomic_json
 
 ENGINE = DATA_DIR / 'engines' / 'removal'
 MODEL = MODELS_DIR / 'propainter'
-SOURCE = ENGINE / 'source'
+SOURCE = bundled_runtime.propainter_source() or ENGINE / 'source'
 DETECTOR = MODELS_DIR / 'ppocrv5-det' / 'det.onnx'
 
 
@@ -57,6 +61,9 @@ def specification():
 
 
 def interpreter():
+    bundled = bundled_runtime.python_for('removal')
+    if bundled:
+        return bundled
     return ENGINE / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
 
 
@@ -88,12 +95,15 @@ def model_status():
         marker = {}
     weights = all((MODEL / 'weights' / name).is_file() for name in spec['weights'])
     available = bool(weights and interpreter().is_file() and (SOURCE / 'inference_propainter.py').is_file()
+                     and (bundled_runtime.manifest() or not bundled_runtime.stale_venv_home(ENGINE))
                      and DETECTOR.is_file() and marker.get('detector_sha256') == spec['detector']['sha256']
                      and marker.get('revision') == spec['revision']
                      and marker.get('spec_sha256') == hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest())
     return {'name': 'propainter', 'label': 'ProPainter', 'description': '逐帧定位文字，结合相邻帧局部修复',
+            'bundled': bool(bundled_runtime.manifest()),
             'available': available, 'downloaded': weights, 'runtime_ready': available,
-            'device': marker.get('device', ''), 'cuda_available': bool(marker.get('cuda_available', False) and nvidia_available()),
+            'device': marker.get('device', ''), 'cuda_available': bool(available and
+                (marker.get('cuda_available', False) or bundled_runtime.cuda_available()) and nvidia_available()),
             'nvidia_available': nvidia_available(),
             'license': spec['license'], 'repository': spec['repository'], 'model_path': str(MODEL),
             'defaults': spec['defaults']}
@@ -114,6 +124,9 @@ class ModelInstaller:
 
     def update(self, **values):
         with self.lock:
+            if values.get('status') in ('done', 'error', 'cancelled'):
+                values['finished'] = time.time()
+                values['elapsed'] = values['finished'] - self.state.get('started', values['finished'])
             self.state.update(values)
 
     def check(self):
@@ -131,11 +144,26 @@ class ModelInstaller:
             if self.busy():
                 raise ValueError('正在准备消除模型，请等待或取消')
             self.event = threading.Event()
-            self.state = {'status': 'downloading', 'progress': 0, 'message': '准备 ProPainter', 'error': ''}
+            self.state = {'status': 'downloading', 'progress': 0, 'message': '准备 ProPainter', 'error': '', 'started': time.time()}
             threading.Thread(target=self._run, args=(device,), daemon=True, name='removal-model').start()
         return self.get()
 
-    def download(self, url, destination, progress):
+    def download(self, url, destination, progress, expected_sha256=None):
+        for attempt in range(3):
+            self.check()
+            try:
+                self._download_once(url, destination, progress, expected_sha256)
+                return
+            except RemovalCancelled:
+                raise
+            except (OSError, ValueError, RuntimeError) as error:
+                if attempt == 2:
+                    raise RuntimeError(f'{destination.name} 下载失败，已保留有效片段，可重试：{error}') from error
+                self.update(message=f'{destination.name} 连接中断，正在重试 {attempt+1}/2…')
+                if self.event.wait(.5 * (attempt+1)):
+                    raise RemovalCancelled() from error
+
+    def _download_once(self, url, destination, progress, expected_sha256=None):
         destination.parent.mkdir(parents=True, exist_ok=True)
         partial = destination.with_name(destination.name + '.part')
         offset = partial.stat().st_size if partial.exists() else 0
@@ -143,8 +171,22 @@ class ModelInstaller:
         if offset:
             headers['Range'] = f'bytes={offset}-'
         request = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(request, timeout=30) as response:
+        try:
+            response = urllib.request.urlopen(request, timeout=30)
+        except urllib.error.HTTPError as error:
+            if error.code == 416:
+                if expected_sha256 and partial.is_file() and hashlib.sha256(partial.read_bytes()).hexdigest() == expected_sha256:
+                    os.replace(partial, destination)
+                    return
+                partial.unlink(missing_ok=True)
+            raise
+        with response:
             resumed = response.status == 206
+            if resumed:
+                match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+|\*)', response.headers.get('Content-Range', ''))
+                if not match or int(match[1]) != offset:
+                    partial.unlink(missing_ok=True)
+                    raise RuntimeError('服务器续传区间不一致，重新下载')
             if not resumed:
                 offset = 0
             total = int(response.headers.get('Content-Length') or 0) + offset
@@ -162,11 +204,14 @@ class ModelInstaller:
                 raise RuntimeError(f'{destination.name} 下载不完整，可重试续传')
         if partial.stat().st_size < 1024:
             raise RuntimeError('下载内容异常，请检查网络后重试')
+        if expected_sha256 and hashlib.sha256(partial.read_bytes()).hexdigest() != expected_sha256:
+            partial.unlink(missing_ok=True)
+            raise RuntimeError('文件校验失败，已清除损坏片段')
         os.replace(partial, destination)
 
     def install(self, packages, index, device, log):
-        command = [str(interpreter()), '-m', 'pip', 'install', '--only-binary=:all:', '--no-input',
-                   '--disable-pip-version-check', '--timeout', '30', '--retries', '1',
+        command = [str(interpreter()), '-m', 'pip', 'install', '--only-binary=:all:', '--prefer-binary',
+                   '--no-input', '--disable-pip-version-check', '--timeout', '60', '--retries', '5',
                    '--index-url', index, *packages]
         with log.open('a', encoding='utf-8') as output:
             process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
@@ -176,7 +221,11 @@ class ModelInstaller:
                     if self.event.wait(.2):
                         raise RemovalCancelled()
                 if process.returncode:
-                    raise RuntimeError('环境安装失败：' + log.read_text(encoding='utf-8', errors='replace')[-1800:])
+                    detail = log.read_text(encoding='utf-8', errors='replace')[-1800:]
+                    hint = ('网络无法连接依赖源，请检查代理或网络后重试；已下载的模型权重会保留。'
+                            if any(token in detail for token in ('SSL', 'Could not find a version', 'Connection',
+                                                                'timed out', 'Max retries')) else '')
+                    raise RuntimeError((hint + '\n' if hint else '环境安装失败：') + detail)
             finally:
                 if process.poll() is None:
                     process.terminate()
@@ -213,36 +262,47 @@ class ModelInstaller:
                             target.parent.mkdir(parents=True, exist_ok=True)
                             target.write_bytes(bundle.read(item))
                     source_marker.write_text(spec['revision'], encoding='utf-8')
+                self.update(progress=.08, message='下载模型权重…')
                 for i, name in enumerate(spec['weights']):
                     target = MODEL / 'weights' / name
-                    if not target.exists():
-                        self.download(spec['weights_base'] + name, target, .15 + i * .15)
+                    digest = spec.get('weights_sha256', {}).get(name)
+                    if not target.exists() or digest and hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+                        self.download(spec['weights_base'] + name, target, .15 + i * .15, digest)
                 if not DETECTOR.is_file() or hashlib.sha256(DETECTOR.read_bytes()).hexdigest() != spec['detector']['sha256']:
                     self.download(spec['detector']['url'], DETECTOR, .61)
                     if hashlib.sha256(DETECTOR.read_bytes()).hexdigest() != spec['detector']['sha256']:
                         DETECTOR.unlink(missing_ok=True)
                         raise RuntimeError('文字检测模型校验失败，请重新准备模型')
                 self.check()
-                self.update(status='preparing', progress=.65, message='创建独立视频修复环境…')
-                if not interpreter().exists():
-                    venv.EnvBuilder(with_pip=True).create(ENGINE)
-                log = ENGINE / 'install.log'
-                self.update(message='安装 ' + ('NVIDIA GPU' if device == 'cuda' else 'CPU') + ' 推理依赖，首次较慢…')
-                torch_index = 'https://download.pytorch.org/whl/cu126' if device == 'cuda' else (
-                    'https://pypi.org/simple' if os.name == 'nt' else 'https://download.pytorch.org/whl/cpu')
-                self.install(spec['torch'], torch_index, device, log)
-                self.install(spec['packages'], 'https://pypi.org/simple', device, log)
+                self.update(status='preparing', progress=.65, message='校验推理环境…')
+                if bundled_runtime.manifest():
+                    if not bundled_runtime.python_for('removal'):
+                        raise RuntimeError('内置视频修复运行库不完整，请重新安装完整程序包')
+                else:
+                    if not interpreter().exists() or bundled_runtime.stale_venv_home(ENGINE):
+                        venv.EnvBuilder(with_pip=True).create(ENGINE)
+                    log = ENGINE / 'install.log'
+                    self.update(message='准备独立 ' + ('NVIDIA GPU' if device == 'cuda' else 'CPU') + ' 推理依赖…')
+                    # torch/torchvision 始终使用 PyTorch 官方源；Windows CPU 也从这里取，
+                    # 避免 PyPI 证书/代理异常时误报“找不到 torch 版本”。
+                    torch_index = ('https://download.pytorch.org/whl/cu126' if device == 'cuda'
+                                   else 'https://download.pytorch.org/whl/cpu')
+                    self.install(spec['torch'], torch_index, device, log)
+                    self.install(spec['packages'], 'https://pypi.org/simple', device, log)
                 self.check()
                 probe = subprocess.run([str(interpreter()), '-c',
                     'import torch,torchvision,av,cv2,scipy,imageio,einops,timm,onnxruntime; print(int(torch.cuda.is_available()))'],
                     env=environment(device), capture_output=True, text=True, timeout=90, check=False)
-                if probe.returncode or (device == 'cuda' and probe.stdout.strip() != '1'):
+                if probe.returncode:
                     raise RuntimeError('推理环境自检失败：' + (probe.stderr[-1200:] or 'CUDA 不可用，可选择 CPU 后重试'))
+                available_cuda = probe.stdout.strip() == '1'
+                if device == 'cuda' and not available_cuda:
+                    device = 'cpu'
                 hashes = {name: hashlib.sha256((MODEL / 'weights' / name).read_bytes()).hexdigest() for name in spec['weights']}
                 atomic_json(marker, {'revision': spec['revision'], 'device': device, 'cuda_available': device == 'cuda',
                                      'spec_sha256': hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest(),
                                      'weights_sha256': hashes, 'detector_sha256': spec['detector']['sha256']})
-                self.update(status='done', progress=1, message='ProPainter 已就绪')
+                self.update(status='done', progress=1, message='ProPainter 模型已就绪' + (' · 使用 CPU，可按需配置 GPU' if device == 'cpu' else ' · 使用 NVIDIA GPU'))
         except RemovalCancelled:
             self.update(status='cancelled', message='准备已取消，已下载的模型保留')
         except Exception as error:

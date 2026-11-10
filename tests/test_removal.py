@@ -184,6 +184,22 @@ class RemovalTests(unittest.TestCase):
         self.assertTrue(all(n % 8 == 0 for n in size))
         self.assertGreaterEqual(crop[1], 0)
 
+    def test_thin_subtitle_strip_keeps_raft_minimum_size(self):
+        # 640x268 底部字幕条旧尺寸为 512x88，RAFT 金字塔末级只有 1 像素，产生 NaN 后崩溃。
+        roi, crop, size = removal_runner.crop_geometry(
+            640, 268, {'x': .1842, 'y': .8566, 'width': .6478, 'height': .0929}, 512)
+        self.assertGreaterEqual(size[0], removal_runner.REPAIR_MIN_EDGE)
+        self.assertGreaterEqual(size[1], removal_runner.REPAIR_MIN_EDGE)
+        self.assertLessEqual(max(size), 512)
+        self.assertTrue(all(n % 8 == 0 for n in size))
+        self.assertTrue(crop[0] <= roi[0] and crop[2] >= roi[2])
+        self.assertTrue(crop[1] <= roi[1] and crop[3] >= roi[3])
+
+    def test_tiny_frame_is_scaled_up_to_raft_minimum_size(self):
+        _roi, _crop, size = removal_runner.crop_geometry(320, 240, {'x': .4, 'y': .8, 'width': .2, 'height': .1}, 512)
+        self.assertGreaterEqual(min(size), removal_runner.REPAIR_MIN_EDGE)
+        self.assertTrue(all(n % 8 == 0 for n in size))
+
 
 class RemovalTimelineTests(unittest.TestCase):
     def test_composite_keeps_every_pixel_outside_text_mask(self):

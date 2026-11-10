@@ -1,12 +1,13 @@
 """Build the Windows installer for Subtitle Studio.
 
-Stages the same file set as ``tools/package_release.py`` (offline wheels and the
-portable Python runtime included), then compiles ``installer/SubtitleStudio.iss``
-with Inno Setup.
+Stages the same file set as ``tools/package_release.py``, optionally replacing
+the portable runtime with the verified bundle from ``tools/prepare_runtime.py``
+(``--full``: every engine dependency included, only models download later),
+then compiles ``installer/SubtitleStudio.iss`` with Inno Setup.
 
 Usage:
-    runtime\\python\\python.exe installer\\build_installer.py
-    runtime\\python\\python.exe installer\\build_installer.py --iscc "C:\\...\\ISCC.exe"
+    runtime\\python\\python.exe installer\\build_installer.py --full
+    runtime\\python\\python.exe installer\\build_installer.py --full --iscc "C:\\...\\ISCC.exe"
 """
 from __future__ import annotations
 
@@ -55,7 +56,7 @@ def find_iscc(explicit: str | None) -> Path:
     )
 
 
-def stage_release(stage: Path, offline: bool) -> int:
+def stage_release(stage: Path, offline: bool, bundled=False) -> int:
     sys.path.insert(0, str(ROOT))
     from tools import package_release
 
@@ -72,6 +73,18 @@ def stage_release(stage: Path, offline: bool) -> int:
              if name.startswith(('backend/', 'frontend/', 'runtime/')) or name in runtime_files
              or offline and name.startswith('wheels/')}
     files['首次使用说明.txt'] = INSTALLER / '首次使用说明.txt'
+    if bundled:
+        prepared = INSTALLER / 'build/prepared-runtime'
+        manifest = prepared / 'manifest.json'
+        if not manifest.is_file():
+            raise ValueError('请先执行 tools/prepare_runtime.py，准备完整内置依赖')
+        import json
+        if not json.loads(manifest.read_text(encoding='utf-8')).get('ready'):
+            raise ValueError('内置依赖未通过验证，不能发布')
+        files = {name: path for name, path in files.items() if not name.startswith(('runtime/', 'wheels/'))}
+        for path in prepared.rglob('*'):
+            if path.is_file() and not path.is_symlink() and '__pycache__' not in path.parts and path.suffix not in ('.pyc', '.pyo'):
+                files['runtime/' + path.relative_to(prepared).as_posix()] = path
     if not offline:
         # Dependencies can be downloaded from the mirrors in tools/bootstrap.py;
         # keeping the ~106 MB wheels out makes the installer much smaller.
@@ -91,7 +104,7 @@ def stage_release(stage: Path, offline: bool) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         total += source.stat().st_size
-    mode = '离线版（含 wheels）' if offline else '在线版（首次启动下载依赖）'
+    mode = '完整版（依赖已内置，仅模型按需下载）' if bundled else '离线版（含 wheels）' if offline else '在线版（首次启动下载依赖）'
     print(f'已暂存 {len(files)} 个文件，共 {total / 1024 / 1024:.1f} MB -> {stage}  [{mode}]')
     return total
 
@@ -101,20 +114,21 @@ def main() -> int:
     parser.add_argument('--iscc', help='ISCC.exe 的完整路径')
     parser.add_argument('--output', default=str(ROOT / 'dist'), help='安装包输出目录')
     parser.add_argument('--stage-only', action='store_true', help='只生成暂存目录，不编译')
+    parser.add_argument('--full', action='store_true', help='内置全部运行依赖，用户仅下载模型')
     parser.add_argument('--offline', action='store_true',
                         help='打包 wheels 做离线版（体积大，首次启动不需要联网）')
     args = parser.parse_args()
 
     version = app_version()
-    stage = INSTALLER / 'build' / ('stage-offline' if args.offline else 'stage-online')
-    stage_release(stage, offline=args.offline)
+    stage = INSTALLER / 'build' / ('stage-full' if args.full else 'stage-offline' if args.offline else 'stage-online')
+    stage_release(stage, offline=args.offline, bundled=args.full)
     if args.stage_only:
         return 0
 
     iscc = find_iscc(args.iscc)
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    edition = 'offline' if args.offline else 'online'
+    edition = 'full' if args.full else 'offline' if args.offline else 'online'
     print(f'版本 {version}，{edition} 版，使用 {iscc}')
 
     command = [

@@ -18,23 +18,8 @@ EXCLAM_TAIL = set("啊呀吧啦")
 
 
 def normalize_subtitle_punctuation(text: str) -> str:
-    """只保留问叹语气标点；保护数值、单位和英文词内部的符号。"""
-    out = []
-    chars = re.sub(r'\.{3,}|…+|⋯+', '……', str(text or ''))
-    for i, char in enumerate(chars):
-        previous = chars[i-1] if i else ''
-        following = chars[i+1] if i+1 < len(chars) else ''
-        internal = ((char in '.,:/' and previous.isdigit() and following.isdigit())
-                    or (char in "-'’" and previous.isascii() and previous.isalnum()
-                        and following.isascii() and following.isalnum()))
-        unit = char in '%％‰' and previous.isdigit()
-        if internal or unit or not unicodedata.category(char).startswith('P'):
-            out.append(char)
-        elif char == '…':
-            out.append(char)
-        elif char in '？！?!':
-            out.append('？' if char in '？?' else '！')
-    return ''.join(out).strip()
+    """开启标点时保留原文全部标点；关闭时使用独立去标点函数。"""
+    return str(text or '').strip()
 
 
 def strip_subtitle_punctuation(text: str) -> str:

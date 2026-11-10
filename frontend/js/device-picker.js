@@ -60,7 +60,22 @@
     }
     function sync() {
       const selected = select.selectedOptions[0];
-      button.querySelector('span').textContent = selected?.textContent || '';
+      const span = button.querySelector('span');
+      span.textContent = selected?.textContent || '';
+      // “设备”说明跟在当前选项后面（如“自动  当前为 CPU 环境 · 约 2.9 GB”），
+      // 不单独占一行，切换选项时高度不变。
+      if (select.id === 'deviceSelect') {
+        const state = document.querySelector('#gpuState');
+        const note = document.querySelector('#gpuStateText');
+        if (state && note && !state.hidden && note.textContent) {
+          const suffix = document.createElement('small');
+          suffix.className = 'device-note ' + (state.className.match(/\b(ready|failed)\b/)?.[1] || '');
+          // 紧跟“自动”时省略重复的“当前为”，给窄栏留出完整的环境与体积。
+          suffix.textContent = note.textContent.replace(/^当前为\s*/, '');
+          span.append(suffix);
+          if (state.dataset.tip) button.dataset.tip = state.dataset.tip;
+        }
+      }
       button.disabled = select.disabled;
       for (const option of menu.querySelectorAll('[data-value]')) {
         option.setAttribute('aria-selected', String(option.dataset.value === select.value));
@@ -71,12 +86,13 @@
     function syncGpu() {
       // Mirror the GPU action button so the device menu shows it after the
       // "GPU (CUDA)" name, exactly like the model menus.
-      const source = document.querySelector('#gpuDownload');
+      const removal = select.id==='removalDevice';
+      const source = document.querySelector(removal?'#removalInstall':'#gpuDownload');
       if (!source) return;
       const box = document.querySelector('#gpuState');
-      const gone = source.hidden || (box && box.hidden);
+      const gone = !removal && (source.hidden || (box && box.hidden));
       for (const action of menu.querySelectorAll('[data-gpu]')) {
-        action.textContent = source.textContent || '下载 GPU 环境';
+        action.textContent = removal?'一键配置 GPU':source.textContent || '下载 GPU 环境';
         action.disabled = source.disabled;
         action.hidden = gone;
         if (source.dataset.tip) action.dataset.tip = source.dataset.tip;
@@ -94,7 +110,7 @@
         item.dataset.value = option.value; item.textContent = option.textContent;
         item.disabled = option.disabled;
         row.append(item);
-        if (option.value === 'cuda') {
+        if (option.value === 'cuda' && ['deviceSelect','removalDevice'].includes(select.id)) {
           row.classList.add('gpu-choice');
           const gpu = document.createElement('button');
           gpu.type = 'button';
@@ -115,7 +131,10 @@
     menu.addEventListener('click', event => {
       const gpuAction = event.target.closest('[data-gpu]');
       if (gpuAction) {
-        if (!gpuAction.disabled) document.querySelector('#gpuDownload')?.click();
+        if (!gpuAction.disabled) {
+          if(select.id==='removalDevice')window.SubtitleRemoval?.prepareGpu();
+          else document.querySelector('#gpuDownload')?.click();
+        }
         return;
       }
       const item = event.target.closest('[data-value]');
@@ -165,7 +184,7 @@
     }
     const gpuBox = document.querySelector('#gpuState');
     if (gpuBox) {
-      new MutationObserver(syncGpu).observe(gpuBox, { attributes: true, subtree: true });
+      new MutationObserver(() => { syncGpu(); sync(); }).observe(gpuBox, { attributes: true, subtree: true });
     }
     sync();
     return { sync, close };
@@ -175,6 +194,9 @@
     attach(document.querySelector('#deviceSelect'), 'device-picker'),
     attach(document.querySelector('#filterSelect'), 'filter-picker'),
     attach(document.querySelector('#exportFormat'), 'export-format-picker'),
+    attach(document.querySelector('#removalDevice'), 'device-picker'),
+    attach(document.querySelector('#removalQuality'), 'quality-picker'),
+    attach(document.querySelector('#removalFormat'), 'export-format-picker'),
   ];
   window.SubtitleDevicePicker = { sync: () => pickers[0]?.sync() };
   window.SubtitlePickers = { syncAll: () => pickers.forEach(picker => picker?.sync()) };

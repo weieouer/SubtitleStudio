@@ -203,8 +203,9 @@ class JobManager:
                     # 再按 width_split 把过长条目按“每行字数”分段衔接后面；不合并碎片、不改字词。
                     # 停顿切点会参考剧本：同一句内按停顿阈值决定，参考明确断句处强制拆开。
                     if job.task == 'align':
+                        cues, gap_splits = split_on_gaps(cues, job.gap_seconds, job.max_width)
+                        # 0 表示关闭停顿拆条；不写入 0 值，避免界面上出现“已按停顿处理”。
                         if job.gap_seconds > 0:
-                            cues, gap_splits = split_on_gaps(cues, job.gap_seconds, job.max_width)
                             info['gap_splits'] = gap_splits
                         if job.width_split:
                             cues, width_splits = segment_alignment_cues(cues, job.max_width)

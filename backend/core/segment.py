@@ -417,8 +417,6 @@ def _gap_has_audio_support(cue: dict, prev: dict, word: dict, min_gap: float) ->
 
 def split_on_gaps(cues: list[dict], min_gap: float = 0.6, max_width: float=20) -> tuple[list[dict], int]:
     """在可靠词边界按停顿切分；声学静音可修正拖入静音内的词尾。"""
-    if min_gap <= 0:
-        return cues, 0
     out: list[dict] = []
     splits = 0
     for cue in cues:
@@ -441,7 +439,7 @@ def split_on_gaps(cues: list[dict], min_gap: float = 0.6, max_width: float=20) -
                 offset+=len(token);lexical_cuts.add(offset)
         # 持续时长过滤与词对无关，先筛一次，避免每个词对重复遍历全部静音。
         silence_pool = [s for s in cue.get('audio_silences', [])
-                        if s['end']-s['start']+1e-6 >= min_gap]
+                        if min_gap > 0 and s['end']-s['start']+1e-6 >= min_gap]
         boundaries = {}
         forced = set()
         for wi, (prev, word) in enumerate(zip(words, words[1:]), 1):
@@ -450,7 +448,7 @@ def split_on_gaps(cues: list[dict], min_gap: float = 0.6, max_width: float=20) -
                 continue
             gap = float(word.get("start", 0)) - float(prev.get("end", 0))
             found = None
-            if gap + 1e-6 >= min_gap and _gap_has_audio_support(cue, prev, word, min_gap):
+            if min_gap > 0 and gap + 1e-6 >= min_gap and _gap_has_audio_support(cue, prev, word, min_gap):
                 found = (float(prev['end']), float(word['start']))
             else:
                 # 不按时长比例猜文字；只采用位于相邻词之间、覆盖旧词尾的静音。

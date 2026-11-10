@@ -1,21 +1,27 @@
 .mode-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .mode-switch .mode-btn { padding-left: 5px; padding-right: 5px; min-width: 0; font-size: 12px; }
 body[data-mode="remove"] .left > section:not(.mode-card):not(.removal-card),
-body[data-mode="remove"] .center > :not(#removalWorkspace),
+body[data-mode="remove"] .center > :not(#removalWorkspace):not(#bottomTaskDock),
 body[data-mode="remove"] .right > :not(#removalInspector) { display: none !important; }
 .removal-card[hidden], .removal-workspace[hidden], .removal-inspector[hidden] { display: none !important; }
 .removal-step { color: var(--accent-2); font-size: 10px; margin-right: 7px; }
-.removal-source { width: 100%; min-height: 110px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px 10px; border: 1px dashed var(--line-2); background: var(--drop-bg); }
+.removal-source { width: 100%; min-height: 128px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px 10px; border: 1px dashed var(--line-2); background: var(--drop-bg); }
+/* 与另外两个模式的“素材导入”卡等高，切换模式时左侧栏不跳动。 */
+#removalSourceCard { display: flex; flex-direction: column; min-height: 264px; }
+#removalSourceCard .removal-source { flex: 1; }
 .removal-source b { font-size: 12px; overflow-wrap: anywhere; }
 .removal-source span { color: var(--muted); font-size: 11px; }
 .removal-link { border: 0; background: transparent; color: var(--accent-2); padding: 4px 0; min-height: 24px; font-size: 11px; }
 .removal-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0; font-size: 12px; }
 .removal-field select { flex: 1; min-width: 0; max-width: 170px; }
+.removal-field .model-picker { flex: 1; min-width: 0; max-width: 180px; }
+.removal-field .model-btn { width: 100%; min-height: 36px; }
 .removal-model-name { display: flex; justify-content: space-between; align-items: center; font-size: 15px; }
 .removal-note, .removal-path { font-size: 11px; color: var(--muted); line-height: 1.6; margin: 8px 0 0; overflow-wrap: anywhere; }
 .removal-path { user-select: text; }
 .removal-license { margin-top: 12px; color: var(--muted); font-size: 11px; }
 .removal-license a { color: var(--accent-2); }
+.removal-license p { margin: 5px 0 0; line-height: 1.6; }
 .removal-workspace { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 18px; gap: 14px; }
 .removal-workspace-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .removal-eyebrow { display: block; color: var(--accent-2); font-size: 11px; letter-spacing: .4px; }
@@ -55,7 +61,7 @@ body[data-mode="remove"] .right > :not(#removalInspector) { display: none !impor
 .removal-bottom-note { color: var(--muted-2); font-size: 10px; line-height: 1.7; margin-top: auto; }
 .removal-inspector-block summary { font-size: 12px; color: var(--muted); cursor: pointer; }
 .removal-inspector-block[open] summary { margin-bottom: 12px; color: var(--text); }
-.removal-segments { min-height: 150px; display: flex; flex-direction: column; gap: 8px; }
+.removal-segments { min-height: 150px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 13px; }
 .removal-segment-heading { display: flex; justify-content: space-between; align-items: center; }
 .removal-segment-heading h4 { margin: 0; font-size: 12px; }
 .removal-segment-tools { display: flex; gap: 7px; }
