@@ -460,8 +460,10 @@ class AlignmentTests(unittest.TestCase):
     def test_aligner_mismatched_text_rejected(self):
         cues=[{'text':'我们明天去学校','start':0,'end':2}]
         before=copy.deepcopy(cues)
-        with self.assertRaises(ValueError): apply_word_times(cues,[0],[{'text':'完全无关内容','start':.1,'end':1}])
-        self.assertEqual(cues,before)
+        apply_word_times(cues,[0],[{'text':'完全无关内容','start':.1,'end':1}])
+        self.assertIn('不一致',cues[0]['alignment_error'])
+        for field in ('text','start','end'):
+            self.assertEqual(cues[0][field],before[0][field])
 
     def test_small_overlap_is_cut_at_midpoint(self):
         cues=[{'start':0,'end':2},{'start':1.5,'end':3}]

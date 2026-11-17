@@ -1,8 +1,0 @@
-Pretrained flow completion model has loaded...
-Pretrained ProPainter has loaded...
-Network [InpaintGenerator] was created. Total number of parameters: 39.4 million. To see the architecture, do print(network).
-
-Processing: frames [4 frames]...
-  0%|          | 0/2 [00:00<?, ?it/s] 50%|█████     | 1/2 [00:02<00:02,  2.14s/it]100%|██████████| 2/2 [00:04<00:00,  2.07s/it]100%|██████████| 2/2 [00:04<00:00,  2.08s/it]
-
-All results are saved in C:\Users\Ouer\AppData\Local\Temp\removal-real-model-tebq2hpb\window-7bca89sf\results\frames

@@ -23,7 +23,7 @@ import wave
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 import app
-from core import jobs, media, script, segment, srt_io
+from core import jobs, media, segment, srt_io, reference_match
 from core.storage import atomic_json
 
 
@@ -32,6 +32,55 @@ def cue(text="你好", start=0, end=1, **extra):
 
 
 class CoreTests(unittest.TestCase):
+    def test_non_overwrite_export_retries_collision_and_never_truncates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            media = Path(folder) / '视频.mp4'
+            first = app._write_text_output(str(media), None, 'a')
+            second = app._write_text_output(str(media), None, 'b')
+            self.assertEqual(first.read_text(encoding='utf-8'), 'a')
+            self.assertEqual(second.name, '视频_2.srt')
+            self.assertEqual(second.read_text(encoding='utf-8'), 'b')
+
+    def test_overwrite_export_keeps_old_file_when_replace_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            media = Path(folder) / '视频.mp4'
+            target = Path(folder) / '视频.srt'
+            target.write_text('old', encoding='utf-8')
+            with patch.object(app.os, 'replace', side_effect=OSError('disk full')):
+                with self.assertRaises(OSError):
+                    app._overwrite_text_output(str(media), None, 'new')
+            self.assertEqual(target.read_text(encoding='utf-8'), 'old')
+            self.assertFalse(list(Path(folder).glob('.subtitle-export-*')))
+
+    def test_failed_non_overwrite_export_does_not_leave_partial_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            media = Path(folder) / '视频.mp4'
+            original_open = Path.open
+
+            class Broken:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *arguments):
+                    self.handle.close()
+                    return False
+
+                def write(self, text):
+                    raise OSError('disk full')
+
+            def failing_open(path, mode='r', *arguments, **keywords):
+                handle = original_open(path, mode, *arguments, **keywords)
+                if 'x' in mode:
+                    broken = Broken()
+                    broken.handle = handle
+                    return broken
+                return handle
+
+            with patch.object(Path, 'open', failing_open):
+                with self.assertRaises(OSError):
+                    app._write_text_output(str(media), None, '字幕')
+            self.assertFalse(list(Path(folder).glob('视频*.srt')))
+
     def test_export_text_options_preserve_original_and_semantic_punctuation(self):
         items = [cue("你好，世界！\n价格3.5元，50%，don't，GPT-4。", role="甲"), cue("！！", 1, 2), cue("  ", 2, 3)]
         original = copy.deepcopy(items)
@@ -139,22 +188,22 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(parts), 2)
 
     def test_match_is_monotonic_and_unique(self):
-        result = script.match_script([cue("甲"), cue("乙")], script.parse_script_text("角色：乙\n角色：甲"))
+        result = reference_match.match_reference([cue("甲"), cue("乙")], {'text':"角色：乙\n角色：甲"})
         indexes = [h["cue_index"] for h in result["hits"]]
         self.assertEqual(indexes, sorted(set(indexes)))
-        result = script.match_script([cue("你好")], script.parse_script_text("甲：你好\n乙：你好"))
+        result = reference_match.match_reference([cue("你好")], {'text':"甲：你好\n乙：你好"})
         self.assertEqual(result["stats"]["matched"], 1)
         self.assertEqual(result["cues"][0]["text"], "你好")
         self.assertEqual(result["cues"][0]["reference_match"]["status"], "ambiguous")
 
     def test_match_can_relocate_beyond_first_window(self):
-        result = script.match_script([cue("甲甲甲甲") for _ in range(20)] + [cue("乙乙乙乙")],
-                                     script.parse_script_text("角色：乙乙乙乙"))
+        result = reference_match.match_reference([cue("甲甲甲甲") for _ in range(20)] + [cue("乙乙乙乙")],
+                                                {'text':"角色：乙乙乙乙"})
         self.assertEqual(result["hits"][0]["cue_index"], 20)
 
     def test_match_preserves_asr_review_reason(self):
         for line in ("角色：你好", "角色：完全无关台词"):
-            result = script.match_script([cue(needs_review=True)], script.parse_script_text(line))
+            result = reference_match.match_reference([cue(needs_review=True)], {'text':line})
             self.assertTrue(result["cues"][0]["needs_review"])
 
     def test_export_rejects_bad_times_and_overlap(self):
@@ -280,18 +329,13 @@ class HttpTests(unittest.TestCase):
         status, result = self.json_request('POST', '/api/segment', body)
         self.assertEqual(status, 200)
         self.assertEqual(result['mode'], 'reference_copy')
-        self.assertEqual([c['text'] for c in result['cues']], ['中', '中毒的人。'])
+        self.assertEqual([c['text'] for c in result['cues']], ['中', '中毒的人'])
         self.assertEqual((result['cues'][0]['start'], result['cues'][0]['end']), (0, .2))
-        self.assertEqual(result['changed_indices'], [1])
+        self.assertEqual(result['changed_indices'], [])
         self.assertEqual(result['completed_indices'], [1])
-        self.assertEqual(result['merge_suggestions'], 0)
-        body['gap_seconds'] = -1
-        self.assertEqual(self.request('POST', '/api/segment', body)[0], 400)
 
     def test_invalid_schema_returns_400(self):
         cases = [("/api/segment", {"cues": [1]}), ("/api/segment", {"cues": [cue(words=[1])]}),
-                 ("/api/segment/merge", {"cues": [cue()], "max_width": 50}),
-                 ("/api/segment/merge", {"cues": [cue()], "max_gap": -1}),
                  ("/api/srt/export", {"cues": [cue()], "options": []}),
                  ("/api/script/match", {"cues": [cue()], "lines": ["x"]}),
                  ("/api/projects/save", {"source_path": str(self.source), "cues": [cue()], "expected_revision": True}),
@@ -328,6 +372,36 @@ class HttpTests(unittest.TestCase):
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             statuses = list(pool.map(lambda _: self.request("POST", "/api/projects/save", body)[0], range(2)))
         self.assertEqual(sorted(statuses), [200, 409])
+
+    def test_missing_source_project_can_load_save_and_keep_conflict_protection(self):
+        source=self.folder/'moved.srt';source.write_text('',encoding='utf-8')
+        body={'source_path':str(source),'cues':[cue('原字幕')],'expected_revision':0}
+        self.assertEqual(self.json_request('POST','/api/projects/save',body)[0],200)
+        source.unlink()
+        status,loaded=self.json_request('GET','/api/projects/load?path='+quote(str(source)))
+        self.assertEqual(status,200);self.assertFalse(loaded['source_available'])
+        self.assertEqual(loaded['project']['cues'][0]['text'],'原字幕')
+        self.assertEqual(self.json_request('POST','/api/projects/save',body)[0],409)
+        body.update(expected_revision=1,cues=[cue('失联后编辑')])
+        self.assertEqual(self.json_request('POST','/api/projects/save',body)[1]['revision'],2)
+        unknown=self.folder/'never-saved.srt'
+        body.update(source_path=str(unknown),expected_revision=0)
+        self.assertEqual(self.json_request('POST','/api/projects/save',body)[0],404)
+
+    def test_missing_media_keeps_identity_for_relinking_by_content(self):
+        source=self.folder/'identity.wav'
+        with wave.open(str(source),'wb') as output:
+            output.setnchannels(1);output.setsampwidth(2);output.setframerate(16000);output.writeframes(b'\0\0'*160)
+        content=source.read_bytes()
+        body={'source_path':str(source),'cues':[cue('保留字幕')],'initial_cues':[cue('原始字幕')],'expected_revision':0}
+        self.assertEqual(self.json_request('POST','/api/projects/save',body)[0],200)
+        source.unlink();body['expected_revision']=1
+        self.assertEqual(self.json_request('POST','/api/projects/save',body)[0],200)
+        moved=self.folder/'new-name.wav';moved.write_bytes(content)
+        status,result=self.json_request('GET','/api/projects/load?path='+quote(str(moved)))
+        self.assertEqual(status,200);self.assertEqual(result['project']['cues'][0]['text'],'保留字幕')
+        self.assertEqual(result['project']['initial_cues'][0]['text'],'原始字幕')
+        self.assertEqual(result['revision'],0)
 
     def test_conflict_backup_preserves_full_local_project_without_overwriting_remote(self):
         source = self.folder / 'backup-source.srt'
@@ -395,6 +469,15 @@ class HttpTests(unittest.TestCase):
         saved=self.json_request('GET','/api/projects/load?path='+quote(str(source)))[1]['project']
         self.assertTrue(saved['cues'][0]['review_complete']);self.assertEqual(saved['initial_cues'][0]['text'],'原文')
 
+    def test_legacy_missing_reference_metadata_is_ignored_without_changing_real_cues(self):
+        body={'source_path':str(self.source),'cues':[cue('真实字幕')],'expected_revision':0,
+              'reference_gaps':[{'text':'旧版本的空白参考项','before_cue':0}]}
+        status,saved=self.json_request('POST','/api/projects/save',body)
+        self.assertEqual(status,200,saved)
+        loaded=self.json_request('GET','/api/projects/load?path='+quote(str(self.source)))[1]['project']
+        self.assertNotIn('reference_gaps',loaded)
+        self.assertEqual([item['text'] for item in loaded['cues']],['真实字幕'])
+
     def test_reference_full_text_and_offsets_survive_project_save(self):
         text = '\r\n场景：清晨\r\n  我们明天去公园散步。\r\n'
         status, parsed = self.json_request('POST','/api/script/parse',{'text':text})
@@ -441,8 +524,10 @@ class HttpTests(unittest.TestCase):
     def test_imported_outro_is_only_flagged_and_remains_exportable(self):
         status,parsed=self.json_request('POST','/api/srt/parse',{'text':'1\n00:00:00,000 --> 00:00:30,000\n感谢观看点赞关注一键三连\n'})
         self.assertEqual(status,200,parsed)
-        self.assertFalse(parsed['cues'][0].get('exclude_export'))
-        self.assertFalse(parsed['cues'][0]['hallucination']['confirmed'])
+        cue=parsed['cues'][0]
+        self.assertTrue(cue['hallucination'])
+        self.assertFalse(cue.get('exclude_export'))
+        self.assertNotIn('automatic_exclusion',cue['hallucination'])
 
     def test_unordered_sources_survive_parse_save_load_and_rematch(self):
         documents=[{'name':'B.txt','text':'今天晚上一起回家吃饭。😀'},

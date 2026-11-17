@@ -15,11 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 TOP = 'SubtitleStudio'
 TREES = ('backend', 'frontend', 'docs', 'tests', 'tools', 'runtime', 'wheels')
 FILES = ('main.py', 'pyproject.toml', '.gitignore', 'README.md', 'requirements.txt',
-         'requirements-lock.txt', 'config/engines.json', 'config/ui.json', 'config/removal.json', 'config/removal-scan.json')
+         'requirements-lock.txt', 'config/engines.json', 'config/ui.json')
 WORK = ('data/projects', 'data/results', 'data/uploads', 'data/outputs')
 REQUIRED = ('run.bat', 'backend/app.py', 'backend/launch.py', 'frontend/index.html',
             'backend/core/progress_console.py',
-            'tools/bootstrap.py', 'tools/bootstrap_deps.py', 'tools/pip_progress.py',
+            'tools/bootstrap.py', 'tools/pip_progress.py',
             'requirements.txt', 'config/engines.json', 'runtime/python/python.exe',
             'runtime/python/pythonw.exe', 'runtime/python/Lib/venv/__init__.py',
             'runtime/python/Lib/ensurepip/__init__.py')

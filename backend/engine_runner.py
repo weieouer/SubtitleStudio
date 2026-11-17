@@ -47,7 +47,87 @@ def _ascii_copy(path):
         return path
 
 
+def align_chunk(model, chunk):
+    """正常项仅对齐一次；异常项用原时间附近的上下文重试，复用同一模型。"""
+    import tempfile
+    import wave
+    from core.alignment_quality import plain, cue_word_slices, word_timing_issue
+
+    def align(path, text):
+        result = model.align(audio=path, text=text, language='Chinese')[0]
+        return [{'text':w.text, 'start':float(w.start_time), 'end':float(w.end_time)} for w in result]
+
+    words = align(chunk['path'], chunk['text'])
+    cues = chunk.get('cues', [])
+    slices = cue_word_slices(cues, words) if cues else None
+    summary = {'attempted':0, 'accepted':0, 'unresolved':0}
+    if slices is None:
+        return words, summary
+    # 只替换目标词片段，邻句只辅助定位，不改变其结果或文字。
+    replacements = []
+    with wave.open(chunk['path'], 'rb') as source:
+        rate = source.getframerate()
+        duration = source.getnframes()/rate
+        for i, (first, last) in enumerate(slices):
+            cue = cues[i]
+            target = words[first:last]
+            span = float(cue['end'])-float(cue['start'])
+            issue = word_timing_issue(target)
+            shifted = bool(target) and (abs(target[0]['start']-cue['start'])>2.
+                                       or target[-1]['end']>cue['end']+2.)
+            if not issue and not shifted:
+                continue
+            summary['unresolved'] += 1
+            # 仍失败的短句即使时间长度看似正常，也不能被父进程当作成功。
+            for word in target:
+                word['alignment_error'] = issue or '对齐位置偏移较大，局部重试仍未确认'
+            # 粗时间本身跨越几十秒时，没有文字定位证据，不能凭能量猜一句在哪。
+            if not .05 < span <= max(8., min(15., len(plain(cue['text']))*.8+2.)):
+                continue
+            left = right = i
+            # 全局异常时按当前一句的原时间重试，邻句会把短句再次拉向远处。
+            low = max(0., cues[left]['start']-.6)
+            high = min(duration, max(c['end'] for c in cues[left:right+1])+.6)
+            if high<=low or high-low>30:
+                continue
+            summary['attempted'] += 1
+            with tempfile.TemporaryDirectory(prefix='local-align-') as folder:
+                path = str(Path(folder)/'audio.wav')
+                begin, stop = round(low*rate), round(high*rate)
+                source.setpos(begin)
+                with wave.open(path, 'wb') as output:
+                    output.setparams(source.getparams())
+                    output.writeframes(source.readframes(stop-begin))
+                try:
+                    retry = align(path, '\n'.join(c['text'] for c in cues[left:right+1]))
+                except Exception as error:
+                    # 局部重试失败不会丢掉已成功的主结果；取消仍由父进程终止。
+                    print(f'Local alignment retry failed: {type(error).__name__}', flush=True)
+                    continue
+            retry_slices = cue_word_slices(cues[left:right+1], retry)
+            if retry_slices is None:
+                continue
+            a, b = retry_slices[i-left]
+            candidate = [{**w, 'start':w['start']+low, 'end':w['end']+low} for w in retry[a:b]]
+            if word_timing_issue(candidate):
+                continue
+            if (candidate[0]['start']<cue['start']-1. or candidate[-1]['end']>cue['end']+1.
+                    or candidate[-1]['end']>duration+.001):
+                continue
+            if (first and candidate[0]['start']<words[first-1]['end']-.001
+                    or last<len(words) and candidate[-1]['end']>words[last]['start']+.001):
+                continue
+            replacements.append((first, last, candidate))
+            summary['accepted'] += 1
+            summary['unresolved'] -= 1
+    for first, last, candidate in reversed(replacements):
+        words[first:last] = candidate
+    return words, summary
+
+
 def run(request, result_path, progress_path):
+    from core.windows_runtime import configure_libraries
+    configure_libraries()
     import torch
     use_cuda = request['device'] != 'cpu' and torch.cuda.is_available()
     if request['device'] == 'cuda' and not use_cuda:
@@ -58,11 +138,13 @@ def run(request, result_path, progress_path):
         from qwen_asr import Qwen3ForcedAligner
         model = Qwen3ForcedAligner.from_pretrained(model_path, dtype=torch.float16 if use_cuda else torch.float32, device_map=device)
         aligned = []
+        retries = {'attempted':0, 'accepted':0, 'unresolved':0}
         for i, chunk in enumerate(request['chunks']):
             atomic_write(progress_path, {'progress':i/len(request['chunks']),'message':f'音轨对齐 {i+1}/{len(request["chunks"])} 段'})
-            words = model.align(audio=chunk['path'], text=chunk['text'], language='Chinese')[0]
-            aligned.append([{'text':w.text,'start':float(w.start_time),'end':float(w.end_time)} for w in words])
-        atomic_write(result_path, {'aligned_words':aligned})
+            words, summary = align_chunk(model, chunk)
+            aligned.append(words)
+            for key in retries: retries[key] += summary[key]
+        atomic_write(result_path, {'aligned_words':aligned, 'local_retry':retries})
         return
     if engine == 'firered':
         from fireredasr2s.fireredasr2 import FireRedAsr2, FireRedAsr2Config

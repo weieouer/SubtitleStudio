@@ -67,20 +67,18 @@ def stage_release(stage: Path, offline: bool, bundled=False) -> int:
     files = package_release.selected_files(ROOT, include_work=False)
     # Only ship what the app needs to run: no dev docs, no test suite.
     runtime_files = {'run.bat', 'requirements.txt', 'requirements-lock.txt',
-                     'config/engines.json', 'config/ui.json', 'config/removal.json', 'config/removal-scan.json',
+                     'config/engines.json', 'config/ui.json',
                      'tools/bootstrap.py', 'tools/pip_progress.py'}
     files = {name: path for name, path in files.items()
              if name.startswith(('backend/', 'frontend/', 'runtime/')) or name in runtime_files
              or offline and name.startswith('wheels/')}
     files['首次使用说明.txt'] = INSTALLER / '首次使用说明.txt'
     if bundled:
+        from tools.prepare_runtime import prepared_runtime
         prepared = INSTALLER / 'build/prepared-runtime'
-        manifest = prepared / 'manifest.json'
-        if not manifest.is_file():
-            raise ValueError('请先执行 tools/prepare_runtime.py，准备完整内置依赖')
-        import json
-        if not json.loads(manifest.read_text(encoding='utf-8')).get('ready'):
-            raise ValueError('内置依赖未通过验证，不能发布')
+        status = prepared_runtime(prepared)
+        if not status['ready']:
+            raise ValueError('内置依赖未通过验证，不能发布：' + status['reason'] + '；请先执行 tools/prepare_runtime.py')
         files = {name: path for name, path in files.items() if not name.startswith(('runtime/', 'wheels/'))}
         for path in prepared.rglob('*'):
             if path.is_file() and not path.is_symlink() and '__pycache__' not in path.parts and path.suffix not in ('.pyc', '.pyo'):
@@ -133,6 +131,7 @@ def main() -> int:
 
     command = [
         str(iscc),
+        '/Qp',
         f'/DAppVersion={version}',
         f'/DStageDir={stage}',
         f'/DSourceRoot={ROOT}',

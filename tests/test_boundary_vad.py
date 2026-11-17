@@ -21,6 +21,69 @@ def curve(length, runs):
 
 
 class VadPrimitiveTests(unittest.TestCase):
+    def test_both_edges_can_trim_when_interior_words_support_same_speech_run(self):
+        audio=np.zeros(16000*3)
+        words=[{'word':'你好','start':0.,'end':.8},{'word':'世界','start':.8,'end':2.}]
+        frames=curve(80,[(10,44,.9)])
+        self.assertAlmostEqual(_vad_start(audio,16000,0.,2.,words,frames,0.),.30)
+        self.assertAlmostEqual(_vad_end(audio,16000,0.,2.,words,frames,0.),1.428)
+
+    def test_tail_without_speech_uses_preceding_word_as_context(self):
+        words=[{'word':'你好','start':.1,'end':.7},{'word':'吧','start':1.1,'end':1.5}]
+        frames=curve(60,[(3,23,.9)])
+        self.assertTrue(boundaries._trailing_word_without_speech(frames,0.,words))
+        self.assertFalse(boundaries._trailing_word_without_speech(np.zeros(60),0.,words))
+        frames[36:40]=.32
+        self.assertFalse(boundaries._trailing_word_without_speech(frames,0.,words))
+
+    def test_tail_short_word_continuity_is_symmetric_with_first_word(self):
+        words=[{'word':'回家','start':.1,'end':.6},{'word':'吧','start':.68,'end':.84}]
+        self.assertTrue(boundaries._compact_edge_word(words,at_end=True))
+        words[-1]['start']=1.;words[-1]['end']=1.16
+        self.assertFalse(boundaries._compact_edge_word(words,at_end=True))
+
+    def test_isolated_start_run_cannot_trim_without_following_word_context(self):
+        words=[{'word':'你好','start':0.,'end':1.},{'word':'世界','start':1.5,'end':2.}]
+        frames=curve(100,[(10,20,.9)])
+        result=_vad_start(np.zeros(16000*3),16000,0.,2.5,words,frames,0.)
+        self.assertIsNone(result)
+
+    def test_isolated_tail_run_cannot_trim_without_preceding_word_context(self):
+        words=[{'word':'你好','start':.1,'end':.6},{'word':'世界','start':1.,'end':2.8}]
+        frames=curve(100,[(55,65,.9)])
+        result=_vad_end(np.zeros(16000*4),16000,0.,3.2,words,frames,0.)
+        self.assertIsNone(result)
+
+    def test_leading_word_on_sound_effect_is_rejected_only_with_later_speech(self):
+        words=[{'start':0.,'end':.3},{'start':.8,'end':1.4}]
+        probabilities=curve(60,[(0,1,.2),(25,45,.9)])
+        self.assertTrue(boundaries._leading_word_without_speech(probabilities,0.,words))
+        self.assertFalse(boundaries._leading_word_without_speech(np.zeros(60),0.,words))
+        self.assertFalse(boundaries._leading_word_without_speech(None,None,words))
+        self.assertFalse(boundaries._leading_word_without_speech(probabilities,0.,words[:1]))
+
+    def test_isolated_loud_vad_peak_does_not_certify_first_word_as_speech(self):
+        words=[{'start':0.,'end':.4},{'start':.9,'end':1.5}]
+        probabilities=curve(65,[(3,4,.99),(28,48,.9)])
+        self.assertTrue(boundaries._leading_word_without_speech(probabilities,0.,words))
+        # 一个真实但短促的首字仍要保护，不能将其单帧证据直接删掉。
+        self.assertFalse(boundaries._leading_word_without_speech(probabilities,0.,
+                         [{'start':.064,'end':.16},words[1]]))
+
+    def test_sustained_quiet_or_voiced_prefix_is_not_treated_as_effect(self):
+        words=[{'start':0.,'end':.4},{'start':.9,'end':1.5}]
+        for probability in (.32,.95):
+            with self.subTest(probability=probability):
+                frames=curve(65,[(2,6,probability),(28,48,.9)])
+                self.assertFalse(boundaries._leading_word_without_speech(frames,0.,words))
+
+    def test_quiet_first_word_is_protected_and_spanning_first_word_can_be_trimmed(self):
+        words=[{'start':0.,'end':.3},{'start':.8,'end':1.4}]
+        probabilities=curve(60,[(2,8,.32),(25,45,.9)])
+        self.assertFalse(boundaries._leading_word_without_speech(probabilities,0.,words))
+        self.assertFalse(boundaries._leading_word_without_speech(curve(60,[(25,45,.9)]),0.,
+                         [{'start':0.,'end':1.1},words[1]]))
+
     def test_runs_ignore_short_blips_and_bridge_short_dips(self):
         bridged=curve(40,[(5,15,.9),(17,18,.9)])
         self.assertEqual(_vad_runs(bridged),[(5,18)])
@@ -100,6 +163,57 @@ class VadPrimitiveTests(unittest.TestCase):
 
 
 class VadIntegrationTests(unittest.TestCase):
+    def test_short_tail_word_missed_by_vad_keeps_words_and_marks_existing_warning(self):
+        cue={'text':'回家吧','start':.1,'end':1.,'alignment':{'engine':'test'},
+             'words':[{'word':'回家','start':.1,'end':.7},
+                      {'word':'吧','start':.78,'end':1.}]}
+        with patch.object(boundaries,'_vad_region',return_value=(0.,curve(60,[(3,21,.9)]))):
+            result=self._refine(cue)[0]
+        self.assertNotIn('alignment_error',result)
+        self.assertIn('尾字',result['alignment_warning'])
+        self.assertEqual(result['end'],1.)
+        self.assertEqual(result['words'],cue['words'])
+
+    def test_disconnected_tail_on_effect_is_marked_for_manual_review(self):
+        cue={'text':'回家吧','start':.1,'end':1.5,'alignment':{'engine':'test'},
+             'words':[{'word':'回家','start':.1,'end':.7},
+                      {'word':'吧','start':1.1,'end':1.5}]}
+        with patch.object(boundaries,'_vad_region',return_value=(0.,curve(60,[(3,23,.9)]))):
+            result=self._refine(cue)[0]
+        self.assertIn('尾字',result['alignment_error'])
+        self.assertEqual(result['text'],cue['text'])
+        self.assertTrue(result['needs_review'])
+
+    def test_short_first_word_with_coherent_following_words_keeps_model_time(self):
+        # 实测“不自量力”：VAD 漏掉 160ms 的“不”，不能退回更早的 51.14s。
+        cue={'text':'不自量力','start':51.42,'end':52.22,'alignment':{'engine':'test'},
+             'words':[{'word':'不','start':51.42,'end':51.58},
+                      {'word':'自','start':51.66,'end':51.82},
+                      {'word':'量','start':51.9,'end':51.98},
+                      {'word':'力','start':52.14,'end':52.22}]}
+        audio=np.zeros(16000*54,dtype=np.float32)
+        probabilities=curve(50,[(20,45,.9)])
+        with patch.object(boundaries,'_vad_region',return_value=(51.12,probabilities)):
+            result=self._refine(cue,audio=audio)[0]
+        self.assertNotIn('alignment_error',result)
+        self.assertIn('alignment_warning',result)
+        self.assertEqual((result['start'],result['end']),(51.42,52.22))
+        self.assertEqual(result['words'],cue['words'])
+        self.assertTrue(result['needs_review'])
+
+    def test_first_word_on_non_speech_is_marked_without_guessing_or_losing_text(self):
+        cue={'text':'你好世界','start':0.,'end':1.5,'alignment':{'engine':'test'},
+             'words':[{'word':'你','start':0.,'end':.3},
+                      {'word':'好世界','start':.8,'end':1.4}]}
+        before=deepcopy(cue)
+        with patch.object(boundaries,'_vad_region',return_value=(0.,curve(60,[(25,45,.9)]))):
+            result=self._refine(cue)[0]
+        self.assertIn('首字',result['alignment_error'])
+        self.assertTrue(result['needs_review'])
+        self.assertEqual(result['text'],before['text'])
+        self.assertEqual(result['start'],before['start'])
+        self.assertEqual(cue,before)
+
     def _cue(self):
         return {'start':0.,'end':2.,'text':'你好，走吧','words':[
             {'word':'你好','start':0.,'end':.9},{'word':'走吧','start':1.,'end':2.}]}

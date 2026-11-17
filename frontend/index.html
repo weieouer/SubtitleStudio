@@ -21,7 +21,6 @@
   })();
 </script>
 <link rel="stylesheet" href="/css/style.css">
-<link rel="stylesheet" href="/css/removal.css">
 </head>
 <body>
 <header class="topbar">
@@ -33,8 +32,10 @@
     <button id="soundToggle" type="button" aria-pressed="true" data-tip="开启或关闭按键、刻度和完成提示音。">音效 开</button>
     <label class="sound-volume"><input id="soundVolume" type="range" min="0" max="100" step="5" value="80" aria-label="音效音量"><output id="soundLevel">80%</output></label>
     <button id="btnOpenProject" data-tip="打开此前保存的字幕项目，恢复字幕、时间轴和参数。">项目</button>
+    <button id="btnDrafts" type="button" hidden>恢复草稿</button>
     <button id="btnSave" data-tip="保存可继续编辑的工程及设置（Ctrl+S）；写出 SRT 或 MKV 请使用导出。">保存工程</button>
     <button id="btnHelp">帮助</button>
+    <button id="btnShortcutSettings" type="button">设置</button>
     <div class="appearance-wrap">
       <div class="appearance" id="appearance" role="group" aria-label="外观">
         <span class="appearance-thumb" aria-hidden="true"></span>
@@ -68,7 +69,6 @@
     <section class="card mode-card">
       <h3>处理模式</h3>
       <div class="mode-switch" role="tablist" aria-label="处理模式">
-        <button class="mode-btn" type="button" data-mode="remove" role="tab" aria-selected="false" tabindex="-1" data-tip="框选视频里的硬字幕，使用 ProPainter 修复背景，输出新视频。">字幕消除</button>
         <button class="mode-btn active" type="button" data-mode="extract" role="tab"
                 aria-selected="true" tabindex="0"
                 data-tip="直接识别视频人声生成字幕，不需要剧本；适合没有剧本，或先出字幕再人工校对。">字幕提取</button>
@@ -77,31 +77,6 @@
                 data-tip="将 SRT 对齐视频音轨；可另行导入任意格式剧本，用“对比校验”核对参考。刚提取的字幕会自动带入，不需要重复导入。">字幕对齐</button>
       </div>
       <p id="modeNote" class="mode-note">无需剧本，直接提取字幕</p>
-    </section>
-
-    <section id="removalSourceCard" class="card removal-card" hidden>
-      <h3>素材导入</h3>
-      <button id="removalChoose" class="removal-source dropzone" type="button"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/></svg><b id="removalSourceName">选择需要消除字幕的视频</b><span id="removalSourceMeta">原视频保留，结果另存</span></button>
-      <button id="removalUseCurrent" class="removal-link" type="button" hidden>使用当前视频</button>
-      <button id="removalChange" class="removal-link" type="button" hidden>更换视频</button>
-    </section>
-    <section id="removalModelCard" class="card removal-card" hidden>
-      <h3>参数</h3>
-      <div class="removal-model-name"><b>ProPainter</b><span id="removalModelBadge" class="badge">未准备</span></div>
-      <p class="muted small">逐帧定位文字，局部修复；模型按需下载，GPU 加速可一键配置。</p>
-      <label class="removal-field">运行环境<select id="removalDevice"><option value="cuda">NVIDIA GPU</option><option value="cpu">CPU</option></select></label>
-      <button id="removalInstall" type="button">下载并准备模型</button>
-      <button id="removalCancelInstall" type="button" hidden>取消准备</button>
-      <p id="removalInstallStatus" class="removal-note" role="status">正在检查模型状态…</p>
-      <div class="removal-license"><a href="https://github.com/sczhou/ProPainter" target="_blank" rel="noreferrer">ProPainter · NTU S-Lab</a><p>模型遵循原作者非商用许可，独立环境不会改动项目依赖。</p></div>
-    </section>
-    <section id="removalQualityCard" class="card removal-card" hidden>
-      <h3>输出与高级设置</h3>
-      <label class="removal-field">精度<select id="removalQuality"><option value="384">快速 · 384</option><option value="512" selected>均衡 · 512</option><option value="640">精细 · 640</option></select></label>
-      <p class="removal-note">处理边长影响修复细节与显存。原视频分辨率保留，视频会重新编码。</p>
-      <label class="removal-field">输出格式<select id="removalFormat"><option value="mkv">MKV · 保留原音轨</option><option value="mp4">MP4 · 兼容音轨</option></select></label>
-      <button id="removalFolder" type="button">选择输出文件夹</button>
-      <p id="removalFolderPath" class="removal-path">开始前选择保存位置</p>
     </section>
 
     <section class="card">
@@ -152,8 +127,8 @@
 
     </section>
 
-    <section class="card">
-      <h3 id="settingsTitle">参数</h3>
+    <section class="card" id="settingsPanel" aria-labelledby="settingsTitle">
+      <div class="settings-heading"><h3 id="settingsTitle">参数</h3><button id="btnRecommendedSettings" type="button" class="mini" data-tip="中文短剧推荐：自动设备、开启人声检测、每行20字、停顿0.6秒、保留问号/感叹号/省略号；时间微调归零。语气词按原开关处理；不改当前字幕、模型、主题或音量。">推荐参数</button></div>
       <div class="recognition-only">
       <div class="field model-field">
         <span class="label-row">
@@ -170,7 +145,7 @@
       </div>
       <div class="field">
         <span class="label-row">
-          <label class="field-label" for="deviceSelect" tabindex="0" data-tip="自动会优先用可用的 NVIDIA GPU。未安装 CUDA/cuBLAS 或 GPU 不可用时，自动回退 CPU 运行，不会中断任务；CPU 更稳但更慢。">设备</label>
+          <label class="field-label" for="deviceSelect" tabindex="0" data-tip="自动优先使用可用的 NVIDIA GPU；未安装 GPU 运行环境时使用 CPU。若提示显存不足，请切换 CPU 后重试；CPU 通常更慢。">设备</label>
         </span>
         <div class="device-box">
           <select id="deviceSelect">
@@ -212,41 +187,33 @@
         </div>
       </div>
 
-    </section>
-
-    <section class="card export-panel" id="subtitleParameters" aria-labelledby="exportTitle">
-      <div class="export-heading"><h3 id="exportTitle" tabindex="0" data-tip="语音活动检测、语气词控制提取；标点、数字和每行字数参与校准与导出；时间微调先预览，再应用到字幕；应用后参与导出，0为关闭；均不改原始ASR记录。疑似字幕照常保留，供人工复核。">字幕限制</h3></div>
-      <div class="export-options">
-        <label class="check" data-tip="提取时先检测人声区间，减少静音或音乐误识别；不会分离背景音，已识别的疑似字幕仍保留。对齐时不按此选项删除字幕。"><input type="checkbox" id="vadCheck" checked> 语音活动检测</label>
-        <label class="check" data-tip="仅控制提取阶段是否保留笑声、叹气、嗯啊等语气词；对比、校准和对齐不自动删除现有字幕，删除由你决定。"><input type="checkbox" id="keepInterjections"> 语气词</label>
-        <label class="check" data-tip="开启保留参考原文标点，关闭隐藏标点；编辑、参考、预览与导出同步，保护小数、时间和英文词内部符号。"><input type="checkbox" id="keepPunc" checked> 标点符号</label>
-        <label class="check" data-tip="勾选按每行字数换行，保留已有换行；取消则导出为单行。不改变字幕时间戳。"><input type="checkbox" id="wrapSubtitles" checked> 字幕换行</label>
-        <label class="check" data-tip="勾选使用阿拉伯数字，取消使用中文数字；校准后的编辑、预览与导出同步，原始ASR记录保留不改。"><input type="checkbox" id="arabicNumbers"> 阿拉伯数字</label>
-      </div>
-      <div class="subtitle-timing">
-
+      <details id="timingAdvanced" class="timing-advanced">
+        <summary>对齐后时间微调 <span id="timingAdjustState">未设置</span></summary>
+        <p class="timing-explanation">对齐后按需调整显示时间；先预览，确认后应用到字幕。</p>
+      <div class="subtitle-timing" role="group" aria-label="字幕时间微调">
         <label data-tip="比识别时间提前显示，最多1秒；遇到上一条字幕会收紧，避免重叠。需点击预览或应用到字幕；0为关闭；导出使用已应用的编辑区时间。">提前出现 <input id="subtitleLead" type="number" min="0" max="1" step="0.05" value="0" aria-label="字幕提前出现秒数"> 秒</label>
         <label data-tip="结束后最多延长1秒，默认尽量衔接下一条；遇到下一条开始时间或视频结尾就截断，不重叠。需点击预览或应用到字幕；0为关闭；导出使用已应用的编辑区时间。">延后消失 <input id="subtitleTail" type="number" min="0" max="1" step="0.05" value="0" aria-label="字幕延后消失秒数"> 秒</label>
         <label data-tip="不足此时长的字幕自动延长结束时间，遇到下一条开始或视频结尾即停止，不重叠。需点击预览或应用到字幕；0为关闭；导出使用已应用的编辑区时间。">最短显示 <input id="subtitleMin" type="number" min="0" max="10" step="0.1" value="0" aria-label="字幕最短显示秒数"> 秒</label>
         <label data-tip="预览最长显示时长；应用可能裁掉发声时会停止，不能用它代替音轨对齐。0为关闭，范围0.1至30秒；导出使用编辑区时间。">最长显示 <input id="subtitleMax" type="number" min="0" max="30" step="0.1" value="0" aria-label="字幕最长显示秒数"> 秒</label>
       </div>
+      <section class="timing-review" aria-label="字幕时间微调操作">
+        <div class="timing-actions">
+          <span id="timingPreviewNote" role="status">预览和导出使用编辑区时间；微调参数需手动应用</span>
+          <button id="btnPreviewTiming" type="button" aria-pressed="false">预览微调</button>
+          <button id="btnApplyTiming" type="button" data-tip="将微调结果写入字幕时间，可撤销。可能截掉发声或缺少可靠词时间时不应用。">应用到字幕</button>
+        </div>
+      </section>
+      </details>
     </section>
+
+
   </aside>
 
   <div class="splitter" id="splitLeft" data-side="left" role="separator" aria-orientation="vertical" aria-label="调整左侧栏宽度" tabindex="0"></div>
 
   <section class="center">
-    <section id="removalWorkspace" class="removal-workspace" hidden>
-      <div class="removal-workspace-head"><div><span class="removal-eyebrow">视频背景修复</span><h2>框选字幕，修复背景</h2></div><div class="removal-view-switch" role="group" aria-label="消除效果对比"><button id="removalViewOriginal" type="button" class="active">原片</button><button id="removalViewResult" type="button" disabled>预览结果</button></div></div>
-      <div id="removalStage" class="removal-stage">
-        <video id="removalVideo" controls preload="metadata"></video>
-        <svg id="removalSelection" viewBox="0 0 1000 1000" preserveAspectRatio="none" tabindex="0" role="application" aria-label="字幕区域；拖动框选，方向键微调，Shift加方向键移动10像素"><rect id="removalRegion" x="0" y="0" width="0" height="0"/><g id="removalHandles"></g></svg>
-        <div id="removalEmpty" class="removal-empty"><svg viewBox="0 0 64 64" width="56" height="56" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="7" y="12" width="50" height="37" rx="7"/><path d="M17 38h30M22 43h20M27 22l12 7-12 7z"/></svg><h3>先选择一段视频</h3><p>框选字幕，预览背景修复效果</p><span>原片 · 框选 · 预览 · 消除</span></div>
-      </div>
-      <div class="removal-video-tools"><button id="removalDraw" type="button" disabled>框选字幕区域</button><button id="removalClear" type="button" disabled>清除选区</button><span id="removalRegionHint" class="muted small">选区应包含完整文字与描边</span></div>
-      <div class="removal-guidance"><b>先预览，再处理整片</b><span>在有字幕的画面框选，只修复框内区域。复杂背景可能有残影，先用 3 秒预览检查。</span></div>
-    </section>
     <div class="preview-workspace">
+    <button id="btnRelinkMedia" type="button" hidden>重新关联素材</button>
     <div class="video-wrap" id="videoWrap">
       <div class="video-frame" id="videoFrame">
         <video id="video" controls preload="metadata"></video>
@@ -257,14 +224,24 @@
 
 
 
+    <section class="card export-panel" id="subtitleParameters" aria-labelledby="exportTitle">
+      <div class="export-heading"><h3 id="exportTitle" tabindex="0" data-tip="语音活动检测、语气词控制提取；标点、数字和每行字数参与校准与导出；时间微调先预览，再应用到字幕；应用后参与导出，0为关闭；均不改原始ASR记录。被标记字幕照常保留，供人工复核。">字幕限制</h3></div>
+      <div class="export-options">
+        <label class="check" data-tip="提取时先检测人声区间，减少静音或音乐误识别；不会分离背景音，已识别的异常字幕仍保留。对齐时不按此选项删除字幕。"><input type="checkbox" id="vadCheck" checked> 语音活动检测</label>
+        <label class="check" data-tip="仅控制提取阶段是否保留笑声、叹气、嗯啊等语气词；对比、校准和对齐不自动删除现有字幕，删除由你决定。"><input type="checkbox" id="keepInterjections"> 语气词</label>
+        <label class="check" data-tip="开启只保留感叹号、问号和省略号，去掉逗号、句号等句读；关闭隐藏全部句读。编辑、参考、预览与导出同步，保护小数、时间和英文词内部符号。"><input type="checkbox" id="keepPunc" checked> 标点符号</label>
+        <label class="check" data-tip="勾选按每行字数换行，保留已有换行；取消则导出为单行。不改变字幕时间戳。"><input type="checkbox" id="wrapSubtitles" checked> 字幕换行</label>
+        <label class="check" data-tip="勾选使用阿拉伯数字，取消使用中文数字；校准后的编辑、预览与导出同步，原始ASR记录保留不改。"><input type="checkbox" id="arabicNumbers"> 阿拉伯数字</label>
+      </div>
+    </section>
     </div>
     <div id="timelineResize" class="timeline-resize" role="separator" tabindex="0" aria-orientation="horizontal" aria-label="拖动调整轨道高度"></div>
     <section id="timelinePanel" class="timeline-panel">
     <div class="wave-toolbar"><span id="waveReadout">00:00.00</span><span class="spacer"></span><label class="wave-gain" data-tip="仅调整波形显示幅度，不改变音量或音频。波形自动归一化，拖动滑块可进一步看清较轻的发音。">波形 <input id="waveGain" type="range" min="0.5" max="4" step="0.25" value="1" aria-label="波形显示幅度"><output id="waveGainValue">1×</output></label><button id="waveStyle" type="button" data-tip="切换波形显示：正常波浪或矩形图；只改画法，不改音频和音量。">波浪</button><button id="waveZoomOut" type="button" data-tip="缩小声波时间轴">−</button><button id="waveZoomIn" type="button" data-tip="放大声波时间轴">＋</button><button id="waveReset" type="button" data-tip="显示整段媒体时间轴">全片</button></div>
-    <div class="wave-view"><canvas id="wave" height="96" tabindex="0" role="slider" aria-label="声音时间轴，滚轮缩放，拖动播放位置，Shift加滚轮平移，拖动选中区间边缘校时" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"></canvas><i id="waveCursor" class="wave-cursor" hidden></i></div>
+    <div class="wave-view"><canvas id="wave" height="96" tabindex="0" role="slider" aria-label="声音时间轴，滚轮缩放，拖动播放位置，Alt加滚轮左右移动音频条，拖动选中区间边缘校时" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"></canvas><i id="waveCursor" class="wave-cursor" hidden></i></div>
     <div id="wavePan" class="wave-pan" tabindex="0" aria-label="音轨视窗，拖动滚动条查看前后音轨"><div id="wavePanExtent"></div></div>
     <div class="statusbar">
-      <span id="cueCount" data-tip="已对齐：当前字幕中有成功音轨强制对齐记录的条数。疑似：被标记为疑似噪音、低置信或剧本匹配待复核的字幕，单条只计一次。统计始终基于全部字幕，疑似条目照常处理。">共 0 条 · 已对齐 0 条 · 疑似 0 条</span>
+      <span id="cueCount" data-tip="已对齐：当前字幕中有成功音轨强制对齐且未发现时间异常的条数。待复核：仍有轻微错误、明显错误或时间异常，需要复核的字幕，单条只计一次。统计始终基于全部字幕，问题条目照常处理。">共 0 条 · 已对齐 0 条 · 待复核 0 条</span>
       <span id="selInfo" class="muted"></span>
       <span class="spacer"></span>
       <span id="widthInfo" class="muted small"></span>
@@ -279,60 +256,51 @@
         <div class="progress"><i id="progressBar"></i></div>
         <div id="jobMsg" class="muted small">等待任务</div>
       </div>
-      <div class="removal-progress">
-        <progress id="removalProgress" max="1" value="0"></progress>
-        <p id="removalJobStatus" role="status">选择视频后开始框选</p>
-        <p id="removalJobDetail" class="removal-note"></p>
-        <button id="removalReconnect" class="removal-link" type="button" hidden>继续查询任务</button>
-      </div>
     </div>
   </section>
 
   <div class="splitter" id="splitRight" data-side="right" role="separator" aria-orientation="vertical" aria-label="调整右侧栏宽度" tabindex="0"></div>
 
   <aside class="right">
-    <section id="removalInspector" class="removal-inspector" hidden>
-      <div class="removal-inspector-head"><span class="removal-eyebrow">字幕消除</span><h3>确认区域与范围</h3><p class="muted small">本模式使用独立视频，不改变字幕编辑内容。</p></div>
-      <div class="removal-run-actions"><button id="removalPreview" type="button" disabled>预览当前 3 秒</button><button id="removalStartJob" class="primary" type="button" disabled>开始消除</button><button id="removalCancelJob" type="button" hidden>取消处理</button></div>
-      <section class="removal-inspector-block"><h4 id="removalRegionSummary">框选区域 · 尚未框选</h4><div class="removal-region-grid"><label>X<input id="removalX" type="number" min="0" step="1" value="0"></label><label>Y<input id="removalY" type="number" min="0" step="1" value="0"></label><label>宽<input id="removalW" type="number" min="2" step="1" value="0"></label><label>高<input id="removalH" type="number" min="2" step="1" value="0"></label></div><p id="removalSelectionInfo" class="removal-note">尚未框选</p></section>
-      <section class="removal-segments"><div class="removal-segment-heading"><h4>字幕出现时间段</h4><span id="removalSegmentCount" class="muted small">未扫描</span></div><div class="removal-segment-tools"><button id="removalScan" type="button" disabled>扫描全片</button><button id="removalAddSegment" type="button" disabled>＋ 手动添加</button></div><p id="removalScanHint" class="removal-note">扫描整个视频的框选区域；使用 PP-OCRv5 文字检测，候选段需复核。</p><div id="removalSegments" class="removal-segment-list"><p class="removal-note">先框选字幕位置，再扫描；也可手动添加出现时间。</p></div></section>
-      <section class="removal-inspector-block"><h4 id="removalRangeSummary">处理范围 · 全片</h4><button id="removalFullRange" class="removal-link" type="button">恢复全片范围</button><div class="removal-region-grid"><label>开始 / 秒<input id="removalStart" type="number" min="0" step="0.1" value="0"></label><label>结束 / 秒<input id="removalEnd" type="number" min="0" step="0.1" value="0"></label></div></section>
-      <div id="removalResult" class="removal-result" hidden><span id="removalResultTitle" class="removal-eyebrow">处理完成</span><p id="removalResultPath" class="removal-path"></p><button id="removalLocate" type="button">定位结果文件</button><button id="removalUseResult" type="button">用于字幕提取</button></div>
-      <p class="removal-bottom-note">短片预览只比较画面，不含音轨；完整输出保留原音轨。模型状态与效果以实际处理为准。</p>
-    </section>
     <div class="right-head">
       <h3 tabindex="0" data-tip="按字幕顺序逐条对照全文参考。疑似错字、谐音、漏字、多字和多候选都需人工判断，剧本与视频不同不代表 ASR 错误。">字幕编辑</h3>
-      <label class="cue-select-all" data-tip="勾选全部字幕，包括“不导出”条目；仅用于批量编辑，不改变导出标记。"><input id="selectAllCues" type="checkbox" disabled>全选</label>
-      <span id="selectedCueLabel" class="selected-cue-label">请选择字幕</span>
 
     </div>
     <div class="cue-search-row">
-      <select id="filterSelect" title="筛选" data-tip="按状态筛选表格：待复核、疑似噪音或文字已确认。">
-        <option value="all">全部</option>
-        <option value="low">待复核</option>
-        <option value="noise">疑似噪音</option>
-        <option value="edited">文字已确认</option>
+      <select id="filterSelect" title="标签筛选" aria-label="标签筛选" data-tip="按条目标签筛选；筛选只影响查看，不改变勾选、字幕内容或导出范围。">
+        <option value="all" data-button-label="标签筛选">全部标签</option>
+        <option value="minor">疑似问题</option>
+        <option value="obvious">明显错误</option>
+        <option value="calibrated">校准通过</option>
+        <option value="verified">校验通过</option>
+        <option value="aligned">对齐通过</option>
+        <option value="unchecked">尚未校准</option>
+        <option value="unaligned">尚未对齐</option>
       </select>
       <input id="searchInput" placeholder="搜索字幕 / 参考 / 编号" data-tip="搜索字幕文字、参考文档或字幕编号；回车跳到下一个匹配，Shift+回车向上，Esc 清空。">
       <button id="btnExport" class="success" disabled data-tip="选择导出目录；导出全部未标记“不导出”的字幕，不受勾选影响，保留编辑区起止时间。">导出</button>
     </div>
     <div class="toolbar cue-process-tools">
       <button id="btnExtract" class="primary" disabled>提取字幕</button>
+      <button id="btnVerify" class="primary" disabled hidden data-tip="先对照剧本定位错字、多识别和缺失，不改文字和时间。">校验字幕</button>
       <button id="btnRerunSelected" class="primary" disabled data-tip="重新识别勾选字幕，支持全选和多选，不限条数；两个模式均可使用，其他字幕不受影响。处理中可点“取消”停止余下条目。">重新识别</button>
       <button id="btnCalibrate" class="primary" disabled hidden data-tip="按对比校验确认的位置，将右侧参考文字填入左侧字幕；不新增、删除、合并或拆分条目，不改起止时间。已删除条目不恢复，参考不确定的保留待复核。报告确认后再执行对齐字幕。">校准字幕</button>
-      <button id="btnRealignAll" class="primary" disabled hidden data-tip="按音频波形更新全部字幕起止时间；同一句内明显停顿按阈值断句，参考里明确是两句话时按句界拆开、不受停顿阈值影响，过长字幕按每行字数分段衔接后面；不合并、不改字词。完成后重新校验、刷新标签并弹出报告。">对齐字幕</button>
+      <button id="btnRealignAll" class="primary" disabled hidden data-tip="按音频波形更新全部字幕起止时间；同一句内明显停顿按阈值断句，参考里明确是两句话时按句界拆开、不受停顿阈值影响，过长字幕按每行字数分段衔接后面；不合并、不改字词。完成后刷新时间状态与报告，保留校验/校准/修改来源，不重跑全文参考校验。">对齐字幕</button>
     </div>
     <div id="exportResult" class="export-result" hidden><span>最近导出</span><span id="exportResultPath" class="export-result-path"></span><button id="btnLocateExport" type="button">定位文件</button><button id="btnCopyExportPath" type="button">复制路径</button></div>
     <div class="toolbar cue-edit-tools">
       <button id="btnMerge" disabled data-tip="勾选两条或多条连续相邻字幕，按前后顺序合并为一条；时间取第一条开始到最后一条结束；可撤销。">合并</button>
       <button id="btnSegment" disabled data-tip="在当前长句中间附近的完整词边界独立拆分，保留各段时间，不拼入下一条原字幕；可撤销。">分段</button>
-      <button id="btnAddCue" disabled data-tip="在当前选中行之后插入一条空白字幕。">添加</button>
+      <button id="btnAddCue" disabled data-tip="填写字幕文字后，在当前选中行之后添加；不创建空白字幕。">添加</button>
       <button id="btnDelete" disabled data-tip="删除全部勾选的字幕；可撤销。">删除</button>
       <button id="btnUndo" disabled data-tip="撤销上一步编辑（Ctrl+Z）。">撤销</button>
       <button id="btnReset" disabled data-tip="恢复本次提取或导入时的全部初始字幕，包含文字、时间和导出状态；可撤销。">重置</button>
     </div>
-    <section class="timing-review">        <div class="timing-actions"><span id="timingPreviewNote" role="status">预览和导出使用编辑区时间；下列微调参数需手动应用</span><button id="btnPreviewTiming" type="button" aria-pressed="false">预览微调</button><button id="btnApplyTiming" type="button" data-tip="将微调结果写入字幕时间，可撤销。可能截掉发声或缺少可靠词时间时不应用。">应用到字幕</button></div></section>
-    <section id="referenceGaps" class="reference-gaps" aria-label="参考疑似漏句" hidden></section>
+
+    <div class="cue-list-tools">
+      <label class="cue-select-all" data-tip="勾选全部字幕，不受标签和搜索筛选限制；仅决定批量编辑范围，不改变导出范围。"><input id="selectAllCues" type="checkbox" disabled>全选</label>
+      <span id="selectedCueLabel" class="selected-cue-label">请选择字幕</span>
+    </div>
     <div class="table-wrap">
       <table class="cues">
         <thead><tr>
@@ -350,18 +318,40 @@
 
     <details id="referenceSettings" class="reference-settings" hidden><summary data-tip="分数范围 0–1。短句自动采用更严格门槛。拼音仅作辅助，阈值不是字幕正确率。相邻字幕可组合搜索，仍保留各条原时间。">匹配参数</summary><div>
       <label>最低分<input id="matchMinimum" type="number" min="0" max="1" step="0.01" value="0.64"></label>
-      <label>高度匹配<input id="matchHigh" type="number" min="0" max="1" step="0.01" value="0.94"></label>
+      <label data-tip="控制高分证据门槛及短句跨来源匹配；文字完全一致才显示高度匹配，谐音、错字和漏字仍需复核。">高分门槛<input id="matchHigh" type="number" min="0" max="1" step="0.01" value="0.94"></label>
       <label>拼音相似<input id="matchPhonetic" type="number" min="0" max="1" step="0.01" value="0.90"></label>
       <label>候选分差<input id="matchAmbiguity" type="number" min="0" max="1" step="0.005" value="0.035"></label>
       <label>相邻条数<input id="matchGroup" type="number" min="1" max="4" step="1" value="3"></label>
-      <button id="btnVerifyAgain" type="button" data-tip="按当前参考重新对比校验，只刷新对比结果，不改字幕文字和时间。">重新对比校验</button>
     </div></details>
-    <p id="rightModeNote" class="right-mode-note">对比校验 → 校准字幕 → 对齐字幕。自动完成不代表人工确认；文字已确认的字幕仍会显示时间问题。标签不会自动排除字幕。</p>
+    <p id="rightModeNote" class="right-mode-note">校验 → 校准 → 人工处理红色项 → 对齐。每条字幕分别显示校准、对齐两个状态标签。导入后尚未校准；校验后显示明显错误、疑似问题或校验通过，采用参考后为校准通过。对齐前尚未对齐，对齐后显示明显错误、疑似问题或对齐通过。同组状态互相覆盖。标签不会自动删除或排除字幕。</p>
   </aside>
 </main>
 
 <div id="toast" class="toast"></div>
 <div id="tip" class="tip" role="tooltip"></div>
+<dialog id="shortcutDialog" aria-labelledby="shortcutTitle">
+  <h3 id="shortcutTitle">快捷键设置</h3>
+  <p class="muted small">点击输入框后按下组合键。设置保存在当前浏览器，应用到所有工程。</p>
+  <div class="shortcut-grid">
+    <label>播放／暂停<input data-shortcut="play" readonly aria-label="播放暂停快捷键"></label>
+    <label>保存工程<input data-shortcut="save" readonly aria-label="保存工程快捷键"></label>
+    <label>撤销<input data-shortcut="undo" readonly aria-label="撤销快捷键"></label>
+    <label>重做<input data-shortcut="redo" readonly aria-label="重做快捷键"></label>
+    <label>搜索字幕<input data-shortcut="search" readonly aria-label="搜索字幕快捷键"></label>
+    <label>音频缩放<select id="shortcutWaveZoom"><option value="none">滚轮</option><option value="alt">Alt＋滚轮</option><option value="ctrl">Ctrl＋滚轮</option><option value="shift">Shift＋滚轮</option></select></label>
+    <label>音频左右移动<select id="shortcutWavePan"><option value="alt">Alt＋滚轮</option><option value="none">滚轮</option><option value="ctrl">Ctrl＋滚轮</option><option value="shift">Shift＋滚轮</option></select></label>
+  </div>
+  <p id="shortcutError" class="shortcut-error" role="alert"></p>
+  <div class="dialog-actions"><button id="btnResetShortcuts" type="button">恢复默认</button><div class="btn-row"><button id="btnCancelShortcuts" type="button">取消</button><button id="btnSaveShortcuts" type="button" class="primary">保存设置</button></div></div>
+</dialog>
+<dialog id="addCueDialog">
+  <form method="dialog">
+    <h3>添加字幕</h3>
+    <label for="addCueText">字幕内容</label>
+    <textarea id="addCueText" rows="3" required autofocus placeholder="请输入字幕文字"></textarea>
+    <div class="dialog-actions"><button type="button" id="btnCancelAddCue">取消</button><button value="add">添加</button></div>
+  </form>
+</dialog>
 <dialog id="projectDialog">
   <h3>打开项目</h3>
   <div id="projectList" class="project-list">正在读取…</div>
@@ -369,6 +359,12 @@
     <button id="btnOpenProjectFolder" type="button" data-tip="打开保存工程 JSON 的文件夹，不是素材所在文件夹。">打开工程文件夹</button>
     <form method="dialog"><button>关闭</button></form>
   </div>
+</dialog>
+<dialog id="draftDialog">
+  <h3>本地草稿</h3>
+  <p class="muted small">草稿保存在当前浏览器与地址下。恢复前保留服务器工程；存在多页冲突时先备份本页。</p>
+  <div id="draftList" class="project-list"></div>
+  <div class="dialog-actions"><form method="dialog"><button>关闭</button></form></div>
 </dialog>
 <dialog id="exportDialog">
   <h3>导出字幕</h3>
@@ -380,17 +376,16 @@
 <dialog id="helpDialog">
   <div class="about-head">
     <h3>字幕工作室</h3>
-    <p class="muted small">版本 <span id="helpVersion">3.1.0</span> · 作者邮箱 <a href="mailto:weieouer@gmail.com">weieouer@gmail.com</a></p>
+    <p class="muted small">版本 <span id="helpVersion">3.2.1</span> · 作者邮箱 <a href="mailto:weieouer@gmail.com">weieouer@gmail.com</a></p>
     <p class="about-notice">未经授权不得商用。</p>
   </div>
   <ol class="help-quick">
-    <li><b>消除</b><span>框选字幕 → 扫描时间段（可手动补充）→ 预览 → 开始消除。</span></li>
     <li><b>导入</b><span>选择音视频提取字幕，或导入 SRT；模型按需下载。</span></li>
     <li><b>处理</b><span>有剧本时：校验差异 → 校准文字 → 对齐时间。</span></li>
     <li><b>复核</b><span>点击字幕定位播放，修改文字和时间；微调先预览，再应用。</span></li>
     <li><b>保存</b><span>“保存工程”方便继续编辑；“导出”生成 SRT / MKV，位置自选。</span></li>
   </ol>
-  <p class="help-legend"><b>标签</b>　蓝色为自动完成，绿色为文字确认；黄／红色需复核，文字确认不代表时间正确。勾选和标签不改变导出标记。</p>
+  <p class="help-legend"><b>标签</b>　校准和对齐各有一个标签，初始为“尚未校准”和“尚未对齐”。结果覆盖为红色明显错误、黄色疑似问题或绿色通过；文字与时间分别判断，标签不改变导出标记。</p>
   <p class="help-keys"><b>快捷键</b>　空格 播放／暂停 · Ctrl+S 保存<br>Ctrl+Z 撤销 · Ctrl+Y 重做 · Ctrl+F 搜索</p>
   <p class="muted small help-hint">更多说明：将鼠标停在按钮或参数上。</p>
   <div class="btn-row" style="justify-content:space-between;align-items:center;">
@@ -414,7 +409,7 @@
   <h3 id="reportTitle">对比校验报告</h3>
   <p id="reportMeta" class="muted small"></p>
   <table class="report-table">
-    <thead><tr><th>字幕</th><th>改动</th><th class="passed">未见异常</th><th class="suspect">疑似问题</th><th class="obvious">明显问题</th></tr></thead>
+    <thead><tr><th>字幕</th><th>改动</th><th class="passed">通过</th><th class="suspect">轻微错误</th><th class="obvious">明显错误</th></tr></thead>
     <tbody>
       <tr><th>处理前</th><td class="muted">—</td><td id="reportBeforePassed">0</td><td id="reportBeforeSuspect">0</td><td id="reportBeforeObvious">0</td></tr>
       <tr><th>处理后</th><td id="reportAfterChanged">0</td><td id="reportAfterPassed">0</td><td id="reportAfterSuspect">0</td><td id="reportAfterObvious">0</td></tr>
@@ -434,8 +429,8 @@
 <script src="/vendor/opencc-js/t2cn.js"></script>
 <script src="/js/chinese.js"></script>
 <script src="/js/device-picker.js"></script>
+<script src="/js/drafts.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/workflow.js"></script>
-<script src="/js/removal.js"></script>
 </body>
 </html>

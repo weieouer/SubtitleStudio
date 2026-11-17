@@ -40,6 +40,26 @@ MAX_SCRIPT = 500_000
 MAX_CUES = 5000
 
 
+def sentence_ranges(text):
+    """按全部句读拆参考；数字和英文词内部符号不作句界，位置始终对应原文。"""
+    start, has_content, pending = 0, False, False
+    for i, char in enumerate(text):
+        previous = text[i-1] if i else ''
+        following = text[i+1] if i+1 < len(text) else ''
+        internal = (char in '.,:/' and previous.isdigit() and following.isdigit()) or (
+            char in "-'’" and previous.isascii() and previous.isalnum()
+            and following.isascii() and following.isalnum())
+        if char.isalnum():
+            if pending:
+                yield start, i
+                start, pending = i, False
+            has_content = True
+        elif (unicodedata.category(char).startswith('P') or char in '\r\n⋯') and not internal and has_content:
+            pending = True
+    if has_content:
+        yield start, len(text)
+
+
 def options_from(value: dict | None) -> dict:
     result = {**DEFAULT_OPTIONS, **(value or {})}
     for key in DEFAULT_OPTIONS:
@@ -111,13 +131,16 @@ def _collapse_numbers(chars: list[str], positions: list[tuple[int, int]]) -> tup
             out_chars.append(chars[i]); out_positions.append(positions[i]); i += 1
             continue
         j = i
-        while j < len(chars) and chars[j] in CN_NUMERALS:
+        while (j < len(chars) and chars[j] in CN_NUMERALS
+               and (j == i or positions[j-1][1] == positions[j][0])):
             j += 1
         value = _cn_number("".join(chars[i:j]))
         # 小数点也折进同一段：三点五 -> 35，与 3.5 归一化后的 35 可比较。
-        if value is not None and j < len(chars) and chars[j] == "点":
+        if (value is not None and j < len(chars) and chars[j] == "点"
+                and positions[j-1][1] == positions[j][0]):
             k = j + 1
-            while k < len(chars) and chars[k] in CN_NUMERALS:
+            while (k < len(chars) and chars[k] in CN_NUMERALS
+                   and positions[k-1][1] == positions[k][0]):
                 k += 1
             if k > j + 1:
                 fraction = _cn_number("".join(chars[j + 1:k]))
@@ -242,6 +265,29 @@ def _index_features(digest, raw):
     return text,positions,phonetic,grams,pygrams,[p[0] for p in positions],[p[1] for p in positions]
 
 
+def inherit_manual_reference(parent: dict, pieces: list[dict]) -> bool:
+    """人工参考随拆条单调分配，子条拼接可恢复全文；不复制整段到每条。"""
+    if 'manual_reference' not in parent or ''.join(p['text'] for p in pieces) != parent['text']:
+        return False
+    raw = parent['manual_reference']
+    query, query_positions = normalized(parent['text'])
+    target, positions = normalized(raw)
+    boundaries = [0]
+    offset = 0
+    query_ends = [end for start,end in query_positions]
+    for piece in pieces:
+        offset += len(piece['text'])
+        boundaries.append(bisect_right(query_ends, offset))
+    mapped = _reference_boundaries(query, target, boundaries) if query and target else [0]*len(boundaries)
+    cuts = [0, *(positions[k][0] if k < len(positions) else len(raw) for k in mapped[1:-1]), len(raw)]
+    uncertain = (not query or not target or Levenshtein.normalized_similarity(query, target) < .64
+                 or bool(parent.get('manual_reference_needs_review')))
+    for piece, lo, hi in zip(pieces, cuts, cuts[1:]):
+        piece['manual_reference'] = raw[lo:hi]
+        piece['manual_reference_needs_review'] = uncertain or lo == hi
+    return True
+
+
 def inherit_reference(parent: dict, pieces: list[dict]) -> bool:
     """把已确认位置的父参考区间分配给子条目，不重复引用整段参考。"""
     match=parent.get('reference_match') or {};reference=match.get('reference')
@@ -250,10 +296,12 @@ def inherit_reference(parent: dict, pieces: list[dict]) -> bool:
             or ''.join(p['text'] for p in pieces)!=parent['text']):return False
     limits=reference.get('source_range')
     if limits and not limits[0]<=reference['start']<reference['end']<=limits[1]:return False
-    query=normalized(parent['text'])[0];raw=reference['text'];text,positions=normalized(raw)
+    query,query_positions=normalized(parent['text']);raw=reference['text'];text,positions=normalized(raw)
     if not query or not text:return False
     boundaries=[0]
-    for piece in pieces:boundaries.append(boundaries[-1]+len(normalized(piece['text'])[0]))
+    offset=0;query_ends=[end for start,end in query_positions]
+    for piece in pieces:
+        offset+=len(piece['text']);boundaries.append(bisect_right(query_ends,offset))
     mapped=_reference_boundaries(query,text,boundaries)
     if any(a>=b for a,b in zip(mapped,mapped[1:])):return False
     if any(positions[k-1]==positions[k] for k in mapped[1:-1] if 0<k<len(positions)):return False
@@ -296,6 +344,17 @@ class ReferenceIndex:
         self.upper=bisect_right(ends,position_bounds[1]) if position_bounds else len(self.text)
         self.paragraphs = document["paragraphs"]
         self.starts = [p["start"] for p in self.paragraphs]
+        self.sentences = []
+        for source in self.sources:
+            for a, b in sentence_ranges(self.raw[source['start']:source['end']]):
+                lo = bisect_left(starts, source['start']+a)
+                hi = bisect_right(ends, source['start']+b)
+                if lo < hi:
+                    self.sentences.append((lo, hi))
+        self.sentence_starts = [a for a, b in self.sentences]
+        self.sentence_ends = [b for a, b in self.sentences]
+        self.sentence_start_set = set(self.sentence_starts)
+        self.sentence_end_set = set(self.sentence_ends)
         self.cache = OrderedDict();self.candidate_queries=0;self.candidate_cache_hits=0
         self.repeated_queries=set();self.exact_cache=OrderedDict()
 
@@ -400,6 +459,17 @@ class ReferenceIndex:
             for left in range(max(self.lower, anchor - 2), min(self.upper, anchor + 3)):
                 for length in range(max(1, n - margin), min(self.upper - left, n + margin) + 1):
                     spans.add((left, left + length))
+        # 补充完整句候选，避免模糊滑窗把漏掉的首尾字切掉，或串入相邻半句。
+        for a, b in list(spans):
+            first = bisect_right(self.sentence_starts, a)-1
+            last = bisect_left(self.sentence_ends, b)
+            if 0 <= first <= last < len(self.sentences):
+                lo, hi = self.sentences[first][0], self.sentences[last][1]
+                if self.lower <= lo < hi <= self.upper and abs(hi-lo-n) <= margin:
+                    spans.add((lo, hi))
+        spans = {(a,b) for a,b in spans if (a,b) in exact or
+                 bisect_right(self.sentence_ends,a) == bisect_left(self.sentence_starts,b)-1 or
+                 (a in self.sentence_start_set and b in self.sentence_end_set)}
         # 先用字符评分筛选，再计算拼音，避免为整本剧本逐窗转拼音。
         ranked = sorted(((fuzz.ratio(query, self.text[a:b]) / 100, a, b) for a, b in spans
                          if self.source_index(a,b) is not None), reverse=True)
@@ -433,7 +503,13 @@ class ReferenceIndex:
             candidates.append({**desc, "norm_start": a, "norm_end": b,
                                "character_score": round(character, 4), "pinyin_score": round(phonetic, 4),
                                "score": round(score, 4)})
-        candidates.sort(key=lambda c: (-c["score"], c["reference_only"], c["norm_start"], c["norm_end"]))
+        def rank(candidate):
+            whole = (n>=5 and abs(candidate['norm_end']-candidate['norm_start']-n)<=2
+                     and candidate['norm_start'] in self.sentence_start_set
+                     and candidate['norm_end'] in self.sentence_end_set)
+            return (-(candidate['score']+(.08 if whole else 0)), candidate['reference_only'],
+                    candidate['norm_start'], candidate['norm_end'])
+        candidates.sort(key=rank)
         # 同一位置的长短变体只保留最佳；不同位置的重复台词仍然独立。
         distinct = []
         for candidate in candidates:
@@ -510,15 +586,15 @@ def _status(query, reference, character, phonetic, options):
 
 def _context_constraints(index, queries, cues, excluded, sequence_indices=None):
     """用前后唯一长台词限定局部位置；不以全文偶然同句证明中间存在对白。"""
-    anchors=[]
+    anchors=[];occurrences=[]
     for ci,query in enumerate(queries):
         anchor=None
-        if ci not in excluded and len(query)>=4:
+        found=[]
+        if ci not in excluded and len(query)>=2:
             # 最稀有二元组定位精确命中，不额外对每条字幕做全文模糊搜索。
             offset=min(range(len(query)-1),key=lambda k:len(index.grams.get(query[k:k+2],())))
             postings=index.grams.get(query[offset:offset+2],())
             lo=bisect_left(postings,index.lower+offset);hi=bisect_left(postings,index.upper)
-            found=[]
             if hi-lo<=256:
                 for position in postings[lo:hi]:
                     start=position-offset;end=start+len(query)
@@ -526,13 +602,35 @@ def _context_constraints(index, queries, cues, excluded, sequence_indices=None):
                     sid=index.source_index(start,end)
                     if sid is None or index.describe(start,end)['reference_only']:continue
                     found.append({'norm_start':start,'norm_end':end,'source_index':sid})
-                    if len(found)>1:break
-            if len(found)==1:anchor=found[0]
+                    if len(found)>32:break
+            if len(query)>=4 and len(found)==1:anchor=found[0]
         anchors.append(anchor)
+        occurrences.append(found if len(found)<=32 else [])
+    # 前一句常是“好的”等重复短句；再向前一句、向后两句寻找可靠锚点，
+    # 仅当同一来源、连续字幕与局部位置共同唯一时提升为上下文锚点。
+    for _ in range(2):
+        for ci, possible in enumerate(occurrences):
+            if anchors[ci] or not possible:continue
+            lefts=[j for j in range(ci-1,max(-1,ci-3),-1) if anchors[j]]
+            rights=[j for j in range(ci+1,min(len(cues),ci+3)) if anchors[j]]
+            supported={}
+            for left in lefts:
+                for right in rights:
+                    a,b=anchors[left],anchors[right]
+                    if (a['source_index']!=b['source_index'] or a['norm_end']>b['norm_start']
+                            or cues[right]['start']-cues[left]['end']>20
+                            or (sequence_indices is not None and sequence_indices[right]-sequence_indices[left]!=right-left)
+                            or b['norm_start']-a['norm_end']>max(48,min(200,sum(map(len,queries[left+1:right]))*3+12))):continue
+                    bounded=[p for p in possible if p['source_index']==a['source_index']
+                             and a['norm_end']<=p['norm_start']<p['norm_end']<=b['norm_start']]
+                    if len(bounded)==1:
+                        candidate=bounded[0]
+                        supported[(candidate['norm_start'],candidate['norm_end'])]=candidate
+            if len(supported)==1:anchors[ci]=next(iter(supported.values()))
     constraints={};keys={}
     for left,a in enumerate(anchors):
         if a is None:continue
-        for right in range(left+2,min(len(cues),left+5)):
+        for right in range(left+2,min(len(cues),left+6)):
             b=anchors[right]
             if (b is None or a['source_index']!=b['source_index'] or a['norm_end']>b['norm_start']
                     or cues[right]['start']-cues[left]['end']>20
@@ -556,6 +654,7 @@ def _context_constraints(index, queries, cues, excluded, sequence_indices=None):
                 constraints[ci]={'lower':lower,'upper':upper,'source_index':a['source_index'],
                     'source_id':source['id'],'source_name':source['name'],'start':raw_start,'end':raw_end,
                     'previous_cue':left,'next_cue':right,'previous_text':cues[left]['text'],'next_text':cues[right]['text'],
+                    'previous_context':[cues[j]['text'] for j in range(max(0,left-1),left+1)],
                     'text':index.raw[raw_start:raw_end]}
     return constraints
 
@@ -653,6 +752,12 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
                         continue
                     if sid!=node.source and node.source>=0 and len(query)<=3 and candidate['score']<opts['high']:continue
                     gain = gain_base * (candidate["score"] - .45)
+                    # 接近整句时优先保留参考首尾字，避免把漏字误报成截短片段的高度匹配。
+                    span_length = candidate['norm_end']-candidate['norm_start']
+                    if (len(query)>=5 and abs(span_length-len(query))<=2
+                            and candidate['norm_start'] in index.sentence_start_set
+                            and candidate['norm_end'] in index.sentence_end_set):
+                        gain += gain_base * .08
                     # 位置只作轻微连续性约束，不能盖过文本证据。
                     source_length=max(1,index.source_ranges[sid][1]-index.source_ranges[sid][0])
                     gap_penalty = (min(opts['jump_penalty'],math.sqrt((candidate['norm_start']-node.ends[sid])/source_length)*opts['jump_penalty'])
@@ -760,15 +865,8 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
     for hit in hits:
         if paragraphs[hit["script_index"]]["cue_index"] is None:
             paragraphs[hit["script_index"]]["cue_index"] = hit["cue_index"]
-    # 不生成字幕，仅给出已匹配位置之间尚未覆盖的参考文字。
+    # 以真实字幕反查剧本，不从未匹配的剧本段落生成空白字幕或缺句行。
     gaps = []
-    ordered = sorted(positions.items())
-    for (previous_ci, previous), (ci, current) in zip(ordered, ordered[1:]):
-        a, b = previous[1], current[0]
-        if previous[4]['source_index']==current[4]['source_index'] and 2 <= b - a:
-            span = index.describe(a, b)
-            gaps.append({**span, "after_cue": previous_ci, "before_cue": ci,
-                         "label": "疑似漏句：参考中存在但字幕未覆盖，请试听确认；不会自动插入", "severity": "error"})
     elapsed=time.perf_counter()-started
     check(1, '校验完成')
     log.info('参考校验 chars=%d cues=%d index_cache=%s index_seconds=%.4f total_seconds=%.4f candidate_queries=%d',

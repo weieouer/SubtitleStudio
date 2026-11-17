@@ -14,6 +14,34 @@ from .model_manager import CATALOG, runtime_python, model_directory, ensure_runt
 from .paths import RESULTS_DIR
 
 
+def speech_chunks(samples, spans, sample_rate=16000, max_seconds=25, check=None):
+    """优先在接近块尾的低能量区切分；无可靠静音时守住最大时长，连续覆盖原音频。"""
+    frame = max(1, round(sample_rate*.02))
+    limit = round(max_seconds*sample_rate)
+    if limit < frame*10:
+        raise ValueError('音频分块时长过短')
+    chunks = []
+    for span in spans:
+        start, stop = int(span['start']), int(span['end'])
+        while start < stop:
+            if check: check()
+            cut = min(stop, start+limit)
+            if cut < stop:
+                lo = max(start+frame*10, cut-round(sample_rate*2))
+                count = (cut-lo)//frame
+                if count >= 10:
+                    block = np.asarray(samples[lo:lo+count*frame],dtype=np.float32).reshape(-1,frame)
+                    energy = np.mean(block*block,axis=1)
+                    quiet = np.convolve(energy,np.ones(10)/10,mode='valid')
+                    at = int(np.argmin(quiet))
+                    # 持续音乐或噪声没有明显低谷时，保留原切点，不凭最小值猜静音。
+                    if quiet[at] < max(1e-10,float(np.percentile(energy,80))*.04):
+                        cut = lo+(at+5)*frame
+            chunks.append((start,cut))
+            start = cut
+    return chunks
+
+
 def transcribe_external(path, name, device, vad, on_progress=None, cancel_event=None, audio=None):
     from .asr import Cancelled
     from .media import decode_audio, probe
@@ -32,10 +60,7 @@ def transcribe_external(path, name, device, vad, on_progress=None, cancel_event=
     if vad:
         from faster_whisper.vad import get_speech_timestamps, VadOptions
         spans = get_speech_timestamps(samples, VadOptions())
-    chunks = []
-    for span in spans:
-        for start in range(span["start"], span["end"], 25 * 16000):
-            chunks.append((start, min(span["end"], start + 25 * 16000)))
+    chunks = speech_chunks(samples, spans, check=check)
     if not chunks:
         return [], {"duration": duration, "engine": spec["engine"]}
     with tempfile.TemporaryDirectory(prefix="engine-", dir=RESULTS_DIR) as temp:
@@ -74,7 +99,8 @@ def transcribe_external(path, name, device, vad, on_progress=None, cancel_event=
                         import time
                         time.sleep(.3)
                 if process.returncode or not result_path.exists():
-                    tail = log_path.read_text(encoding="utf-8", errors="replace")[-1600:]
+                    from .windows_runtime import engine_failure
+                    tail = engine_failure(log_path.read_text(encoding="utf-8", errors="replace"))
                     raise RuntimeError(spec["label"] + " 运行失败：" + tail)
                 data = json.loads(result_path.read_text(encoding="utf-8"))
             finally:

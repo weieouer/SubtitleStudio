@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
-from core.reference_match import normalized, parse_document, match_reference, options_from
+from core.reference_match import normalized, parse_document, match_reference, options_from, sentence_ranges
 
 
 def cue(text, i=0, **more):
@@ -13,6 +13,16 @@ def cue(text, i=0, **more):
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_all_punctuation_splits_reference_but_numeric_symbols_stay_internal(self):
+        raw = '你好，世界！明天12:30见；价格3.5元……再见？'
+        self.assertEqual([raw[a:b] for a,b in sentence_ranges(raw)],
+                         ['你好，','世界！','明天12:30见；','价格3.5元……','再见？'])
+
+    def test_missing_sentence_tail_is_not_high_fragment_match(self):
+        result = self.match(['我们明天去学校学'], '我们明天去学校学习。')['cues'][0]
+        self.assertEqual(result['script_text'], '我们明天去学校学习。')
+        self.assertEqual(result['reference_match']['status'], 'missing')
+
     def match(self, texts, script, **options):
         return match_reference([cue(t,i) for i,t in enumerate(texts)], parse_document(script), options)
 

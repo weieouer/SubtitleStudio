@@ -7,7 +7,7 @@ const THEME_KEY = "subtitleStudio.theme";
 const MODE_LABEL = { extract: "字幕提取", align: "字幕对齐" };
 const THEMES = ["system", "light", "dark"];
 const SESSION_TOKEN = document.querySelector('meta[name="subtitle-session"]')?.content || "";
-const APP_VERSION = '3.1.0';
+const APP_VERSION = '3.2.2';
 const projectVersions = new Map();
 const projectConflicts = new Set();
 let projectSaveChain = Promise.resolve();
@@ -62,7 +62,6 @@ const state = {
   downloadTimer: null,
   downloadActive: false,
   scriptDocument: null,
-  referenceGaps: [],
   scriptName: "",
   scriptNames: [],
   scriptPath: "",
@@ -232,28 +231,32 @@ function editableCueText(text) {
 }
 function mergeEditedCueText(original,edited) {
   const input=simplifiedText(edited);
-  if(state.settings.keepPunc!==false)return input;
-  const raw=[...simplifiedText(original)],old=[...editableCueText(original)],next=[...editableCueText(input)];
+  const raw=[...simplifiedText(original)],typed=[...input],old=[...editableCueText(original)],next=[...editableCueText(input)];
+  if(!raw.length)return input;
   if(!next.length)return '';
-  if(old.join('')===next.join(''))return original;
+  if(old.join('')===next.join(''))return input!==editableCueText(input)?input:original;
   let prefix=0,suffix=0;
   while(prefix<old.length&&prefix<next.length&&old[prefix]===next[prefix])prefix++;
   while(suffix<old.length-prefix&&suffix<next.length-prefix&&old[old.length-1-suffix]===next[next.length-1-suffix])suffix++;
-  const positions=[];let at=0;
-  for(const char of old){at=raw.indexOf(char,at);if(at<0)return next.join('');positions.push(at++);}
+  const positions=[],typedPositions=[];let at=0;
+  for(const char of old){at=raw.indexOf(char,at);if(at<0)return input;positions.push(at++);}
+  at=0;
+  for(const char of next){at=typed.indexOf(char,at);if(at<0)return input;typedPositions.push(at++);}
   const lo=positions[prefix] ?? (positions.length?positions.at(-1)+1:0);
   const hi=old.length-suffix>prefix?positions[old.length-suffix-1]+1:lo;
   // 只替换用户改动的可见文字，未改动前后部分的隐藏标点仍保留。
-  return raw.slice(0,lo).join('')+next.slice(prefix,next.length-suffix).join('')+raw.slice(hi).join('');
+  const typedLo=prefix===0?0:(typedPositions[prefix] ?? typed.length);
+  const typedHi=suffix===0?typed.length:(typedPositions[next.length-suffix-1]??typedLo-1)+1;
+  return raw.slice(0,lo).join('')+typed.slice(typedLo,typedHi).join('')+raw.slice(hi).join('');
 }
-function editLocked() { return !!(state.jobId || state.matchRequest || state.submitting || state.batchRecognition || state.operation || state.loading || state.uploading || state.scriptUploading || state.scriptPickerOpen || downloadBusy() || window.SubtitleRemoval?.busy()); }
+function editLocked() { return !!(state.jobId || state.matchRequest || state.submitting || state.batchRecognition || state.operation || state.loading || state.uploading || state.scriptUploading || state.scriptPickerOpen || state.mediaPickerOpen || downloadBusy()); }
 function sameDocument(path, epoch, before) {
   return projectPath() === path && state.mediaEpoch === epoch && snapshot() === before;
 }
 function replaceCues(cues, { reset = false, before = snapshot(), subtitleFile = state.subtitleFile } = {}) {
   state.editBefore = null;
   state.timingPreview = false;
-  state.cues = cues.map(normalizeCue);
+  state.cues = cues.map(normalizeCue).filter(cue=>cue.text.trim());
   state.subtitleFile = subtitleFile;
   state.selected = -1;
   state.selectedCues = new Set();
@@ -391,7 +394,6 @@ function toast(message, type = "info", ms = 3500) {
 }
 
 function setSaveState(text) {
-  if(state.settings.mode==='remove'&&!text.startsWith('消除'))return;
   $("#topSaveState").textContent = text;
 }
 
@@ -698,7 +700,7 @@ function clamp(value, min, max) {
 function normalizeSettings() {
   const s = state.settings;
   if(s.timingDefaultsVersion!==3){s.subtitleLead=0;s.subtitleTail=0;s.subtitleMin=0;s.subtitleMax=0;s.timingDefaultsVersion=3;}
-  s.mode = ['remove','align','extract'].includes(s.mode) ? s.mode : 'extract';
+  s.mode = ['align','extract'].includes(s.mode) ? s.mode : 'extract';
   s.device = ["auto", "cpu", "cuda"].includes(s.device) ? s.device : "auto";
   s.model = String(s.model || "medium");
   s.vad = s.vad !== false;
@@ -732,18 +734,30 @@ function normalizeSettings() {
   s.waveStyle = s.waveStyle === 'bar' ? 'bar' : 'wave';
 }
 
+function applyRecommendedSettings() {
+  if(editLocked())return;
+  Object.assign(state.settings,{
+    device:'auto',vad:true,gap:.6,width:20,keepPunc:true,wrapSubtitles:true,
+    subtitleLead:0,subtitleTail:0,subtitleMin:0,subtitleMax:0,timingDefaultsVersion:3,
+    matchMinimum:.64,matchHigh:.94,matchPhonetic:.90,matchAmbiguity:.035,matchGroup:3,
+  });
+  state.timingPreview=false;
+  normalizeSettings();syncSettingsUI();renderAll();updateOverlay();
+  scheduleConfigSave();scheduleSave();
+  toast('已应用中文短剧推荐参数；当前字幕和模型保持原样，语气词按原开关处理','success');
+}
+
 function updateWidthInfo() {
   const s = state.settings;
   $("#widthInfo").textContent = `${modeLabel()} · 每行 ≤ ${s.width} · 停顿 ≥ ${s.gap}s`;
 }
 
 function updateModeNote() {
-  if(state.settings.mode==='remove'){$('#modeNote').textContent='框选硬字幕区域，修复背景并另存视频';return;}
   if (state.settings.mode !== 'align') {
     $('#modeNote').textContent = '提取视频人声，生成并导出 SRT';
     return;
   }
-  $('#modeNote').textContent = '对齐视频音轨，剧本作为纠错参考';
+  $('#modeNote').textContent = '先核对剧本内容，再对齐音轨时间';
 }
 
 const PARAM_FIELDS = [
@@ -799,7 +813,7 @@ function syncSettingsUI() {
 function setMode(mode, persist = true) {
   if (persist && editLocked()) return;
   const previous = state.settings.mode;
-  state.settings.mode = ['remove','align','extract'].includes(mode) ? mode : 'extract';
+  state.settings.mode = ['align','extract'].includes(mode) ? mode : 'extract';
   const next = state.settings.mode;
   $$(".mode-btn").forEach((btn) => {
     const active = btn.dataset.mode === next;
@@ -814,11 +828,11 @@ function setMode(mode, persist = true) {
   updateButtons();
   renderSubtitleSource();
   if (persist && previous !== next && next === "align" && state.subtitleFile?.origin === "generated" && state.cues.length) {
-    toast("已带入提取的 SRT，可直接对齐；导入剧本后可用“对比校验”核对参考", "success");
+    toast("已带入提取的 SRT；导入剧本后按“校验字幕 → 校准字幕 → 对齐字幕”处理", "success");
   }
   if (persist) {
     collectSettings();
-    if(next!=='remove')scheduleSave();
+    scheduleSave();
     scheduleConfigSave();
   }
 }
@@ -826,7 +840,6 @@ function setMode(mode, persist = true) {
 function updateModeUI() {
   const align = state.settings.mode === "align";
   document.body.dataset.mode = state.settings.mode;
-  window.SubtitleRemoval?.activate(state.settings.mode==='remove');
   $('#settingsTitle').textContent = '参数';
   const zone = $("#scriptZone");
   $("#dropgrid").classList.toggle("single", !align);
@@ -835,10 +848,11 @@ function updateModeUI() {
   zone.setAttribute("aria-disabled", align ? "false" : "true");
   zone.tabIndex = align ? 0 : -1;
   $('#rightModeNote').hidden = false;
-  $('#rightModeNote').textContent = state.cues.length ? '顺序：对比校验 → 校准字幕 → 对齐字幕；自动完成不代表人工确认，文字确认不覆盖时间问题。标签不会自动排除字幕。点击字幕定位视频。' : '提取或导入字幕后，在这里逐条查看。';
+  $('#rightModeNote').textContent = state.cues.length ? '顺序：校验 → 校准 → 人工处理红色项 → 对齐 → 试听导出。修改文字后可重新对齐；点击字幕定位音轨，问题标签不会自动删除字幕。' : '无字幕先提取，已有字幕直接导入；再依次校验、校准、对齐。';
   $("#btnRealignAll").hidden = !align;
   $("#btnCalibrate").hidden = !align;
-  // 对比校验、重新识别属于字幕提取；对齐模式只保留校准与对齐两个动作。
+  $('#btnVerify').hidden = !align;
+  // 提取模式负责识别；校对模式并排显示校验、校准和对齐三个步骤。
   $("#btnExtract").hidden = align;
   $("#btnRerunSelected").hidden = align;
   $('#referenceSettings').hidden = !align || !state.script.length;
@@ -884,7 +898,7 @@ function commitSettings(event) {
   collectSettings();
   if (['subtitleLead','subtitleTail','subtitleMin','subtitleMax'].includes(event?.target?.id)) state.timingPreview=false;
   updateButtons();
-  if (['deviceSelect','vadCheck','subtitleLead','subtitleTail','subtitleMin','subtitleMax','gapInput','gapRange'].includes(event?.target?.id)) drawWave();
+  if (['deviceSelect','vadCheck','subtitleLead','subtitleTail','gapInput','gapRange'].includes(event?.target?.id)) drawWave();
   else renderTable();
   updateOverlay();
   scheduleConfigSave();
@@ -1154,7 +1168,7 @@ function renderGpuState() {
   button.dataset.blocked = view.disabled ? '1' : '';
   button.disabled = view.disabled || !view.action || editLocked() || downloadBusy();
   button.dataset.tip = view.hint;
-  // 环境说明显示在“设备”选中项后面；状态变化后同步按钮文字。
+  // 环境说明显示在设备菜单的 GPU 选项内，同步状态与操作按钮。
   window.SubtitleDevicePicker?.sync();
 }
 function modelActionHtml(model) {
@@ -1358,13 +1372,14 @@ function uploadFile(file, kind, onProgress = null) {
   });
 }
 
-async function pickMedia() {
+async function pickMedia(relink=false) {
   if (editLocked() || state.mediaPickerOpen) return;
   state.mediaPickerOpen = true;
   updateButtons();
   try {
     const d = await api("/api/dialog", { kind: "media", multiple: false });
-    if (d.path) await loadMedia(d.path);
+    state.mediaPickerOpen = false;
+    if (d.path) await loadMedia(d.path,{relink:relink===true});
   } catch (e) {
     toast(e.message, "error");
   } finally {
@@ -1426,7 +1441,8 @@ async function applyScriptResult(result, sourceName = "") {
   state.script = result.lines;
   state.scriptDocument = result.document;
   state.scriptNames = [...names, name];
-  state.referenceGaps = [];
+
+  state.referenceFingerprint = documentFingerprint(state.scriptDocument, state.script);
   state.cues.forEach(cue => { cue.reference_match = null; cue.script_text = ''; cue.script_index = null; cue.match_ratio = null; cue.match_needs_review = false; });
   state.history = []; state.redoStack = []; state.editBefore = null;
   state.scriptName = name;
@@ -1504,7 +1520,8 @@ function clearScript() {
   if (!state.script.length && !state.scriptUploading) return;
   abortScriptUpload();
   state.script = [];
-  state.scriptDocument = null; state.referenceGaps = [];
+  state.scriptDocument = null;
+  state.referenceFingerprint = '';
   state.cues.forEach(cue => { cue.reference_match = null; cue.script_text = ''; cue.script_index = null; cue.match_ratio = null; cue.match_needs_review = false; });
   state.scriptName = "";
   state.scriptNames = [];
@@ -1586,13 +1603,12 @@ function bindDropzones() {
   };
 
   setup($("#mediaZone"), {
-    disabled: () => !!state.jobId || state.uploading || state.mediaPickerOpen,
+    disabled: () => editLocked(),
     onPick: () => openMaterial(state.media?.path,pickMedia),
     onFile: startMediaUpload,
   });
   setup($("#scriptZone"), {
-    disabled: () => state.settings.mode !== "align" || !!state.jobId
-      || state.scriptUploading || state.scriptPickerOpen,
+    disabled: () => state.settings.mode !== "align" || editLocked(),
     onPick: () => openMaterial(state.scriptPath,pickScript),
     onFile: startScriptUpload,
     multiple: true,
@@ -1635,7 +1651,7 @@ function bindDropzones() {
 }
 
 async function clearMedia() {
-  if (state.jobId || state.submitting || state.operation || state.loading || state.scriptUploading || state.scriptPickerOpen) return;
+  if (state.jobId || state.submitting || state.operation || state.loading || state.scriptUploading || state.scriptPickerOpen || state.mediaPickerOpen) return;
   if (!state.media && !state.uploading) return;
   if (projectPath() && !(await saveProject(false))) { toast('保存失败，已保留当前素材', 'error'); return; }
   state.uploadEpoch++; state.mediaEpoch++; state.asrEpoch++;
@@ -1643,7 +1659,7 @@ async function clearMedia() {
   if (xhr) { try { xhr.abort(); } catch {} }
   clearTimeout(state.saveTimer); abortScriptUpload();
   state.uploading = false; state.uploadName = ''; state.uploadPercent = 0;
-  state.media = null; state.scriptDocument = null; state.referenceGaps = []; state.srtPath = ''; state.subtitleFile = null; state.cues = []; state.initialCues=null; state.selectedCues=new Set(); state.script = []; state.scriptName = ''; state.scriptNames = [];
+  state.media = null; state.scriptDocument = null; state.referenceFingerprint = ''; state.srtPath = ''; state.subtitleFile = null; state.cues = []; state.initialCues=null; state.selectedCues=new Set(); state.script = []; state.scriptName = ''; state.scriptNames = []; state.scriptPath = '';
   state.waveSpan = 0; state.waveStart = 0; state.auditionEnd = null; clearInterval(state.auditionTimer);
   resetWaveDetail();
   state.selected = -1; state.history = []; state.redoStack = []; state.editBefore = null;
@@ -1755,13 +1771,16 @@ function openTerminal() {
 }
 
 async function loadMedia(path, options = {}) {
-  if (state.jobId || state.submitting || state.operation || state.loading || state.scriptUploading || state.scriptPickerOpen) return false;
+  if (state.jobId || state.submitting || state.operation || state.loading || state.scriptUploading || state.scriptPickerOpen || state.mediaPickerOpen) return false;
   const epoch = ++state.mediaEpoch;
   state.loading = true; updateButtons();
   const staged = !state.media && (state.srtPath || state.script.length)
-    ? { cues: state.cues, subtitleFile: state.subtitleFile, script: state.script, scriptName: state.scriptName, scriptNames: state.scriptNames, scriptDocument: state.scriptDocument } : null;
+    ? { cues: state.cues, initialCues:state.initialCues,subtitleFile: state.subtitleFile, script: state.script, scriptName: state.scriptName, scriptNames: state.scriptNames, scriptDocument: state.scriptDocument,
+        scriptPath:state.scriptPath,referenceFingerprint:state.referenceFingerprint } : null;
   try {
-    if (projectPath() && !(await saveProject(false))) throw new Error('当前工程保存失败，已保留当前素材');
+    if (projectPath() && !(await saveProject(false))){
+      if(!options.relink||!staged||!await cacheProjectDraft())throw new Error('当前工程保存失败，已保留当前素材');
+    }
     if (epoch !== state.mediaEpoch) return false;
     const [infoResult, projectResult] = await Promise.all([
       api('/api/media/info?path=' + encodeURIComponent(path)),
@@ -1771,23 +1790,30 @@ async function loadMedia(path, options = {}) {
     const info = infoResult.info;
     if (!info || info.error) throw new Error(info?.error || '媒体信息不可用');
     const savedProject = projectResult.project;
-    const project = savedProject && (options.restore || await confirmDialog('此视频有之前的工程记录。是否恢复之前的参数设置、配置和生成的字幕？\n选择“取消”将从空白字幕开始，原记录在保存前保留。')) ? savedProject : null;
+    if(options.relink&&savedProject&&(savedProject.source_path||savedProject.media_path)!==projectPath()){
+      if(!await confirmDialog('新素材已有另一份工程。是否先备份它，再关联当前字幕？'))return false;
+      await api('/api/projects/backup',{...savedProject,source_path:path});
+    }
+    const project = !options.relink&&savedProject && (options.restore || await confirmDialog('此视频有之前的工程记录。是否恢复之前的参数设置、配置和生成的字幕？\n选择“取消”将从空白字幕开始，原记录在保存前保留。')) ? savedProject : null;
     abortScriptUpload();
     state.media = { ...info, uploaded: !!options.uploaded }; state.srtPath = '';
     state.subtitleFile = typeof project?.subtitle_file?.path === 'string' && project.subtitle_file.path ? project.subtitle_file : null;
-    state.cues = (project?.cues || []).map(normalizeCue);
-    state.initialCues = project?.initial_cues?.map(normalizeCue) || null;
+    state.cues = (project?.cues || []).map(normalizeCue).filter(cue=>cue.text.trim());
+    state.initialCues = project?.initial_cues?.map(normalizeCue).filter(cue=>cue.text.trim()) || null;
     state.selectedCues = new Set();
     state.script = project?.script_lines || []; state.scriptName = project?.script_name || ''; state.scriptPath = project?.script_path||'';
     state.scriptNames = restoredScriptNames(project);
-    state.scriptDocument = project?.script_document || null; state.referenceGaps = [];
-    if (!savedProject && staged) {
+    state.scriptDocument = project?.script_document || null;
+    if ((!savedProject||options.relink) && staged) {
       state.cues = staged.cues; state.subtitleFile = staged.subtitleFile;
       state.script = staged.script; state.scriptName = staged.scriptName;
       state.scriptNames = staged.scriptNames;
       state.scriptDocument = staged.scriptDocument;
-      state.initialCues=JSON.parse(JSON.stringify(staged.cues));
+      state.initialCues=staged.initialCues || JSON.parse(JSON.stringify(staged.cues));
+      state.scriptPath=staged.scriptPath||'';
     }
+    restoreReferenceBinding((!savedProject||options.relink)&&staged
+      ? {reference_fingerprint:staged.referenceFingerprint} : project);
     projectVersions.set(info.path, projectResult.revision ?? savedProject?.revision ?? 0);
     state.history = []; state.redoStack = []; state.editBefore = null; state.selected = -1;
     state.pendingResult = null; state.waveform = null; state.videoErrorShown = false;
@@ -1799,6 +1825,7 @@ async function loadMedia(path, options = {}) {
     if (info.duration > 30) state.waveSpan = 30;
     state.playingIndex = -1;
     video.src = '/api/media/stream?path=' + encodeURIComponent(info.path) + '&token=' + encodeURIComponent(SESSION_TOKEN);
+    $('#btnRelinkMedia').hidden=true;$('#videoEmpty').textContent='选择视频后在这里预览';
     applyPreviewShape(); $('#videoEmpty').hidden = true;
     progressBar.style.width = '0%'; progressBar.style.background = 'var(--accent)'; jobMsg.textContent = '等待任务';
     setSaveState(project ? '已恢复工程' : '');
@@ -1806,7 +1833,7 @@ async function loadMedia(path, options = {}) {
     if (!project && staged) scheduleSave();
     if (project && state.cues.length) {
       const flagged = state.cues.filter(c => c.hallucination && !c.hallucination.dismissed && c.exclude_export).length;
-      toast('已恢复上次编辑：' + state.cues.length + ' 条' + (flagged ? `（${flagged} 条疑似幻觉已默认不导出）` : ''), 'success', flagged ? 9000 : 3500);
+      toast('已恢复上次编辑：' + state.cues.length + ' 条' + (flagged ? `（${flagged} 条幻觉标记待人工复核）` : ''), 'success', flagged ? 9000 : 3500);
     }
     return true;
   } catch (error) {
@@ -1881,6 +1908,8 @@ async function loadWaveform() {
 }
 
 function normalizeCue(c, i) {
+  c={...c};releaseVerificationExclusions([c]);
+  delete c.merge_suggestion; // 旧工程遗留字段；校准已不再生成合并建议
   return {
     ...c,
     original_text: c.original_text ?? String(c.text ?? ''),
@@ -1911,17 +1940,59 @@ function normalizeCue(c, i) {
 
 function snapshot() { return JSON.stringify({ cues: state.cues, subtitleFile: state.subtitleFile }); }
 
+// 参考指纹用于确认匹配/校准结果仍来自当前参考正文和来源顺序，旧工程无指纹时要求重新对比。
+function documentFingerprint(doc, lines) {
+  const text = doc?.text ?? (lines || []).map(line => line.text).join('\n');
+  const sources = (doc?.sources || []).map(source => [source.id, source.name, source.start, source.end].join('\u0000')).join('\u0001');
+  if (!text && !sources) return '';
+  const value = text + '\u0001' + sources;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function bindReferenceMatches(fingerprint) {
+  state.referenceFingerprint = fingerprint;
+  state.cues.forEach(cue => { if (cue.reference_match) cue.reference_match.reference_fingerprint = fingerprint; });
+  return fingerprint;
+}
+
+function restoreReferenceBinding(project) {
+  state.referenceFingerprint = documentFingerprint(state.scriptDocument, state.script);
+  const saved = String(project?.reference_fingerprint || '');
+  const matched = !!saved && saved === state.referenceFingerprint;
+  state.cues.forEach(cue => {
+    const match = cue.reference_match;
+    if (!match) return;
+    if (matched) {
+      if (!match.reference_fingerprint) match.reference_fingerprint = saved;
+    } else {
+      match.stale = true;
+    }
+  });
+  return matched;
+}
+
 function restoreSnapshot(value) {
   const saved = JSON.parse(value);
-  state.cues = saved.cues;
+  state.cues = saved.cues.filter(cue=>String(cue.text||'').trim());
   state.subtitleFile = saved.subtitleFile;
+
   state.selectedCues = new Set();
+}
+
+function trimHistory(items) {
+  let bytes=items.reduce((total,item)=>total+item.length*2,0);
+  while(items.length>1&&(items.length>HISTORY_LIMIT||bytes>16*1024*1024))bytes-=items.shift().length*2;
 }
 
 function pushHistory(before) {
   if (!before || before === snapshot()) return;
   state.history.push(before);
-  if (state.history.length > HISTORY_LIMIT) state.history.shift();
+  trimHistory(state.history);
   state.redoStack = [];
   updateButtons();
 }
@@ -1930,6 +2001,7 @@ function undo() {
   if (editLocked()) return;
   if (!state.history.length) return;
   state.redoStack.push(snapshot());
+  trimHistory(state.redoStack);
   restoreSnapshot(state.history.pop());
   state.selected = -1;
   renderAll();
@@ -1940,6 +2012,7 @@ function redo() {
   if (editLocked()) return;
   if (!state.redoStack.length) return;
   state.history.push(snapshot());
+  trimHistory(state.history);
   restoreSnapshot(state.redoStack.pop());
   state.selected = -1;
   renderAll();
@@ -1949,12 +2022,12 @@ function redo() {
 function hasCompletedModification(cue) {
   if(!cue.edited || !String(cue.text || '').trim() || cue.modification_complete===false)return false;
   const done=cue.modification_complete;
-  // “文字已确认”确认的是内容，不是时间：对齐（或手动改时间）不应当作废内容确认。
+  // “修改通过”确认的是内容，不是时间：对齐（或手动改时间）不应当作废内容确认。
   return !done || done.text===cue.text;
 }
 
-function completeModification(cue) {
-  cue.edited=true;cue.modification_complete={text:cue.text,start:cue.start,end:cue.end};
+function completeModification(cue, kind='manual') {
+  cue.edited=true;cue.modification_complete={text:cue.text,start:cue.start,end:cue.end,kind};
 }
 
 // 一次表格渲染内，同一条字幕的状态会被筛选、统计、徽标和详情栏反复询问；
@@ -1977,6 +2050,7 @@ function cueTimingIssues(cue) {
     reasons.push('时间轴无效');obvious=true;
   }
   if(cue.alignment_error||cue.word_timing_error){reasons.push(cue.alignment_error||cue.word_timing_error);obvious=true;}
+  if(cue.alignment_warning&&!cue.alignment?.stale)reasons.push(cue.alignment_warning);
   if(cue.duration_trim){
     const unresolved=cue.duration_trim.method==='unresolved';
     reasons.push(unresolved?'对齐时长异常，未能自动定位，请试听复核':'时间经过自动收紧或回退，请试听复核');
@@ -1986,72 +2060,143 @@ function cueTimingIssues(cue) {
   // 与 backend/core/duration.py 的警戒值一致；只提示，不硬裁字幕。
   const cap=length<=6?Math.max(1.2,length*.55+.9):Math.max(1.2,length*.8+2);
   if(length&&cue.end-cue.start>cap+1e-6){reasons.push('字幕时间异常偏长，请试听复核');obvious=true;}
-  if(cue.alignment?.stale&&!cue.alignment_error)reasons.push('对齐记录已过期，请重新对齐');
+  const span=cue.end-cue.start,min=Number(state.settings.subtitleMin)||0,max=Number(state.settings.subtitleMax)||0;
+  if(min>0&&span<min-.001){reasons.push(`字幕时长不足设定的 ${min} 秒`);obvious=true;}
+  if(max>0&&span>max+.001){reasons.push(`字幕时长超过设定的 ${max} 秒`);obvious=true;}
+  if(cue.alignment?.stale&&!cue.alignment_error&&!hasCompletedModification(cue))reasons.push('对齐记录已过期，请重新对齐');
   return {reasons,obvious};
 }
 
-function cueVerificationIssues(cue, {requireReference=false, stage=null}={}) {
-  const timing=cueTimingIssues(cue),reasons=[...timing.reasons];
+function cueInterjection(cue) {
+  const text=String(cue.text||'').replace(/[\p{P}\p{S}\p{Z}\p{C}\s]/gu,'');
+  return !!text&&(/^[哈呵嘿嘻噗呲嗤嘎嗬唉哎嗐嘶呼哼切啧嘁呸嘘咄嗯唔呃额诶欸咦啊呀哇哦噢喔哟]+$/.test(text)
+    ||['笑','笑声','大笑','哈哈大笑','苦笑','冷笑','偷笑','叹气','叹息','唉声叹气','哭声','喘气','呼吸声'].includes(text));
+}
+
+function cueVerificationIssues(cue, {requireReference=false, stage=null, includeTiming=true}={}) {
+  const timing=includeTiming?cueTimingIssues(cue):{reasons:[],obvious:false},reasons=[...timing.reasons];
   let obvious=timing.obvious;
   const phase=stage ?? verificationStage(cue);
   const contentPhase=phase==='verify'||phase==='calibrate';
-  if(cue.interjection){
-    if(cue.review_decision==='included')reasons.push('整条为笑声、叹气或填充音；已手动开启导出，校准不会自动关闭');
-    else if(cue.review_decision==='non_script')reasons.push('整条为笑声、叹气或填充音；已手动标为不导出');
-    else reasons.push(state.settings.keepInterjections
-      ? '整条为笑声、叹气或填充音；已开启“语气词”，校准后正常导出'
-      : '整条为笑声、叹气或填充音；关闭“语气词”仅影响提取；此条由你判断后删除或保留');
-    return {reasons,obvious:true};
+  if(!state.settings.keepInterjections&&cueInterjection(cue)){
+    reasons.push('语气词已关闭；此条为笑声、叹气或填充音，由你判断后删除或保留');obvious=true;
   }
   // 内容检查（校验、校准）：只看参考文字。
   const match=cue.reference_match;
-  if(hasCompletedModification(cue)){
-    // 人工确认仅覆盖内容，时间和版式问题继续检查。
+  // 人工确认只覆盖内容；时间和版式问题继续检查。
+  if(!hasCompletedModification(cue)){
+    if(match?.stale || (match?.query_text!=null && match.query_text!==cue.text)){
+      reasons.push('参考已过期，可使用重新校验更新');
+      if(!match.reference?.text)obvious=true;
+    }
+    else if(match && match.status!=='high'){
+      reasons.push(match.warning || (match.status==='unmatched'?'无参考内容':match.label) || '参考内容未确认');
+      // 参考里根本不存在的内容按明显错误处理：多出参考、上下文不符、有参考却完全未匹配。
+      // extra/missing 只代表同一条对应参考中的多字/漏字；双方都有内容时是轻微错误。
+      if(match.status==='context_mismatch'||!match.reference?.text||match.reference?.reference_only)obvious=true;
+    }
+    else if(!match && requireReference && contentPhase){reasons.push('无对应参考，需人工判断');obvious=true;}
   }
-  else if(match?.stale || (match?.query_text!=null && match.query_text!==cue.text))reasons.push('参考已过期，可使用重新校验更新');
-  else if(match && match.status!=='high'){
-    reasons.push(match.warning || (match.status==='unmatched'?'无参考内容':match.label) || '参考内容未确认');
-    // 参考里根本不存在的内容按明显问题处理：多出参考、上下文不符、有参考却完全未匹配。
-    if(match.status==='extra'||match.status==='context_mismatch'
-      ||(match.status==='unmatched'&&requireReference))obvious=true;
-  }
-  else if(!match && requireReference && contentPhase)reasons.push('无参考内容');
   const text=String(cue.text || '');
   const characters=[...text.replace(/[^\p{L}\p{N}]/gu,'')].length;
   if(!characters){reasons.push('字幕文字为空');obvious=true;}
-  // 版式检查（校准、对齐）：每行字数与残留碎片。
-  if(phase==='calibrate'||phase==='align'){
+  // 参数约束对导入、识别和手工修改同样有效，内容确认不能掩盖超限。
+  {
     const limit=Math.max(1,Number(state.settings.width)||20);
     const overWidth=text.split(/\r?\n/).some(line=>[...line].length>limit);
-    if(overWidth)reasons.push(`超过每行 ${limit} 字，可用校准或对齐分段`);
-    if(cue.merge_suggestion){reasons.push('疑似拆出的短碎片，建议合并');obvious=true;}
+    if(overWidth){reasons.push(`超过每行 ${limit} 字，可手动换行或对齐分段`);obvious=true;}
   }
-  if(cue.hallucination && !cue.hallucination.dismissed){
+  if(!hasCompletedModification(cue)&&cue.hallucination && !cue.hallucination.dismissed){
     reasons.push('幻觉特征仍需试听确认');if(cue.hallucination.confirmed!==false)obvious=true;
   }
+  if(!phase&&!hasCompletedModification(cue)&&!reasons.length
+    &&(cue.is_noise||cue.needs_review||cue.match_needs_review))
+    reasons.push('原识别结果待复核，请执行校验或试听确认');
   return {reasons,obvious};
+}
+
+// 内容来源标签：校验通过、校准通过、修改通过各自保留；对齐只追加时间结果。
+function contentPass(cue) {
+  if (hasCompletedModification(cue)) {
+    return cue.modification_complete?.kind==='calibration'
+      ? {kind:'calibrated',label:'校准通过',tip:'采用对应参考校准后未发现已知问题；时间对齐仍单独显示'}
+      : {kind:'modified',label:'修改通过',tip:'人工修改或确认当前文字；时间问题仍会单独显示，原始识别记录保留'};
+  }
+  const stage=cue.content_stage || (verificationStage(cue)==='align' ? '' : verificationStage(cue));
+  if (stage==='verify') return {kind:'verified',label:'校验通过',tip:'对比校验未发现已知问题，不代表已人工确认文字和音轨'};
+  if (stage==='calibrate') return {kind:'calibrated',label:'校准通过',tip:'采用对应参考校准后未发现已知问题，时间对齐仍是独立步骤'};
+  return null;
+}
+
+// 内容来源标签只在内容仍成立时显示；纯时间异常不抹掉来源。
+function contentSourceVisible(cue, verification=cueVerification(cue)) {
+  return !verification||verification.status!=='suspect'||verification.timingOnly||hasCompletedModification(cue);
+}
+
+// 两个互相独立的状态槽；每槽始终只返回一个当前状态，不追加历史通过标签。
+function cueStageStatuses(cue) {
+  const pending=(label)=>({status:'unchecked',label,reason:label});
+  const verdict=(issues,label)=>issues.reasons.length
+    ? {status:'suspect',obvious:issues.obvious,label:issues.obvious?'明显错误':'疑似问题',reason:issues.reasons.join('；')}
+    : {status:'passed',label,reason:label+'，未发现已知问题'};
+  const contentStage=cue.content_stage || verificationStage(cue);
+  const checked=['verify','calibrate'].includes(contentStage)||hasCompletedModification(cue);
+  const reference=subtitleText(cue.manual_reference??cue.script_text??cue.reference_match?.reference?.text??'').trim();
+  const sameReference=!!reference&&subtitleText(cue.text).trim()===reference;
+  const calibrated=(hasCompletedModification(cue)||contentStage==='calibrate')&&sameReference;
+  const contentCue=calibrated?cue:{...cue,edited:false,modification_complete:false};
+  const contentIssues=cueVerificationIssues(contentCue,{requireReference:state.script.length>0,stage:'calibrate',includeTiming:false});
+  if(hasCompletedModification(cue)&&reference&&!sameReference&&!contentIssues.reasons.length)
+    contentIssues.reasons.push('当前字幕与右侧参考不一致');
+  const calibration=checked
+    ? verdict(calibrated?{reasons:[],obvious:false}:contentIssues,calibrated?'校准通过':'校验通过')
+    : pending('尚未校准');
+  // 修改文字或时间使旧对齐过期后，恢复待对齐；本次失败则覆盖为错误。
+  const review=cue.timing_review;
+  const current=review&&review.text===cue.text&&review.start===cue.start&&review.end===cue.end;
+  const attempted=current||(!review&&verificationStage(cue)==='align'&&!cue.alignment?.stale);
+  const timing=cueTimingIssues(cue);
+  if(attempted&&!cue.alignment&&!timing.reasons.length)
+    timing.reasons.push('未取得可靠的音轨对齐结果'),timing.obvious=true;
+  const alignment=attempted?verdict(current&&review.source==='manual'?{reasons:[],obvious:false}:timing,'对齐通过'):pending('尚未对齐');
+  return {calibration,alignment};
+}
+
+function confirmCueTiming(cue,source='manual') {
+  cue.timing_review={text:cue.text,start:cue.start,end:cue.end,source};
+  if(source==='manual'){
+    for(const key of ['alignment_error','alignment_warning','word_timing_error','duration_trim','pause_before','pause_after'])delete cue[key];
+    cue.words=[];cue.alignment={...(cue.alignment||{}),stale:false,manual:true};
+  }
+}
+
+function cueTextClass(cue) {
+  const statuses=Object.values(cueStageStatuses(cue));
+  if(statuses.some(s=>s.status==='suspect'))return 'context-warning';
+  return statuses.some(s=>s.status==='passed')?'passed':'';
 }
 
 function computeCueVerification(cue) {
   const issues=cueVerificationIssues(cue,{requireReference:state.script.length>0});
-  if(cue.interjection&&!cueTimingIssues(cue).reasons.length)return {status:'suspect',obvious:true,label:'语气词',reason:issues.reasons.join('；')};
-  if(issues.reasons.length)
-    return {status:'suspect',obvious:issues.obvious,label:issues.obvious?'明显问题':'疑似问题',reason:issues.reasons.join('；')};
-  if(hasCompletedModification(cue))return {status:'modified',label:'文字已确认',reason:'仅确认当前文字；时间问题仍会单独显示，原始识别记录保留'};
-  const stage=verificationStage(cue);
-  if(!stage)return null;
-  const label=stage==='verify'?'参考一致':stage==='calibrate'?'已校准':'自动对齐完成';
-  return {status:'passed',label,reason:'自动检查未发现已知问题，不代表已人工确认文字和音轨'};
+  if(issues.reasons.length) {
+    // 只有时间问题、没有内容问题时，仍需保留“校验通过/校准通过”来源。
+    const timing=cueTimingIssues(cue);
+    const timingOnly=timing.reasons.length>0&&issues.reasons.length===timing.reasons.length;
+    return {status:'suspect',obvious:issues.obvious,timingOnly,
+      label:issues.obvious?'明显错误':'轻微错误',reason:issues.reasons.join('；')};
+  }
+  if(verificationStage(cue)==='align' && cue.alignment && !cue.alignment.stale)
+    return {status:'passed',kind:'aligned',label:'对齐通过',reason:'本次时间对齐未发现已知问题；原校验、校准及人工修改记录保留'};
+  const content=contentPass(cue);
+  if(!content)return null;
+  return {status:content.kind==='modified'?'modified':'passed',kind:content.kind,label:content.label,reason:content.tip};
 }
 
 function cueReportVerdict(cue, options={}) {
-  if(cue.interjection)return 'obvious';
-  // 建议合并是版式提示，与徽标一致：只在校准、对齐关计入明显问题。
-  const phase=options.stage ?? verificationStage(cue);
-  if(cue.merge_suggestion&&(phase==='calibrate'||phase==='align'))return 'obvious';
   const issues=cueVerificationIssues(cue,options);
   if(issues.reasons.length)return issues.obvious?'obvious':'suspect';
   if(hasCompletedModification(cue))return 'passed';
+  if(verificationStage(cue)==='align'&&!cue.alignment&&!contentPass(cue))return 'unchecked';
   return verificationStage(cue)?'passed':'unchecked';
 }
 
@@ -2078,7 +2223,7 @@ function countChangedCues(before, after) {
 
 function showVerificationReport(operation, before, after, options={}) {
   const beforeStats=verificationStatistics(before,options);
-  const afterStats=verificationStatistics(after,options);
+  const afterStats=verificationStatistics(after,{...options});
   const changed=countChangedCues(before,after);
   const meta=`${operation}前 ${before.length} 条 → ${operation}后 ${after.length} 条 · 改动 ${changed} 条`;
   const set=(id,value)=>{const node=$(id);if(node)node.textContent=String(value);};
@@ -2092,7 +2237,7 @@ function showVerificationReport(operation, before, after, options={}) {
   set('#reportAfterSuspect',afterStats.suspect);
   set('#reportAfterObvious',afterStats.obvious);
   const unchecked=afterStats.unchecked?` · 未校验 ${afterStats.unchecked} 条`:'';
-  set('#reportNote',`处理后：自动检查未发现异常 ${afterStats.passed} 条 · 疑似 ${afterStats.suspect} 条 · 明显问题 ${afterStats.obvious} 条${unchecked}。自动完成不代表人工确认；文字确认不会覆盖时间问题。标签不会自动排除字幕。改动按处理前的字幕逐条核对，拆分或改字都会计入。`);
+  set('#reportNote',`处理后：通过 ${afterStats.passed} 项 · 轻微错误 ${afterStats.suspect} 项 · 明显错误 ${afterStats.obvious} 项${unchecked}。每条字幕分别显示一个校准状态和一个对齐状态，同组结果覆盖旧标签。有对应参考的文字差异标黄；当前字幕无可靠参考或不符合参数标红；只处理真实字幕，不从剧本生成空白行；时间异常始终单独标红。`);
   const dialog=$('#verificationReportDialog');
   if(dialog&&typeof dialog.showModal==='function'){
     try{if(!dialog.open)dialog.showModal();}catch(error){}
@@ -2109,17 +2254,16 @@ function cueVerification(cue) {
 }
 
 function cueNeedsReview(cue) {
-  if(cue.merge_suggestion)return true;
   const check=cueVerification(cue);
   if(check)return !['passed','modified'].includes(check.status);
-  return !!(cue.alignment_error || cue.word_timing_error || cue.is_noise || cue.needs_review || cue.match_needs_review
-    || (cue.confidence != null && cue.confidence < 0.6));
+  // “原识别评分”只是模型原始分数，低分不代表文字错误；是否复核由校验、时间和幻觉标记决定。
+  return !!(cue.alignment_error || cue.word_timing_error || cue.is_noise || cue.needs_review || cue.match_needs_review);
 }
 
 function cueStatistics(cues) {
   let aligned = 0, suspect = 0;
   for (const cue of cues) {
-    if (cue.alignment && !cue.alignment.stale && !cueTimingIssues(cue).reasons.length) aligned++;
+    if (cueStageStatuses(cue).alignment.status==='passed') aligned++;
     if (cueNeedsReview(cue)) suspect++;
   }
   return { total: cues.length, aligned, suspect };
@@ -2127,17 +2271,16 @@ function cueStatistics(cues) {
 
 function cueExcluded(cue) { return !!cue.exclude_export || cue.review_decision === 'non_script'; }
 
-// 标签只做标注，不再自动关闭导出。旧版本留下的自动排除在再次执行三关时解除；
-// 手动“不导出”、幻觉默认排除和语气词规则保持原样。
+// 问题只标注；旧校验/语气词自动排除立即解除，明确人工“不导出”保留。
 function releaseVerificationExclusions(cues, indices=null) {
   const scope=indices?new Set(indices):null;
   let restored=0;
   cues.forEach((cue,i)=>{
     if(scope&&!scope.has(i))return;
-    if(!cue.verification_excluded)return;
+    if(!cue.verification_excluded&&!cue.interjection_excluded&&!cue.hallucination)return;
     delete cue.verification_excluded;
-    const hallucinated=cue.hallucination&&!cue.hallucination.dismissed;
-    if(cue.exclude_export&&!hallucinated&&cue.review_decision!=='non_script'){
+    delete cue.interjection_excluded;
+    if(cue.exclude_export&&cue.review_decision!=='non_script'){
       cue.exclude_export=false;
       restored++;
     }
@@ -2148,20 +2291,18 @@ function releaseVerificationExclusions(cues, indices=null) {
 function cueReviewHtml(cue, i) {
   const m = cue.reference_match;
   const score = n => Math.round((n || 0)*100)+'%';
-  const merge = cue.merge_suggestion
-    ? '<p class="merge-hint" data-tip="勾选本条与相邻字幕后点击“合并”，文字按前后顺序拼接，时间取第一条开始到最后一条结束。">建议合并：' +
-      escapeHtml(cue.merge_suggestion.reason || '疑似拆出的短碎片') + '</p>'
-    : '';
   let details = '';
+  const approve = !hasCompletedModification(cue)&&cueVerification(cue)?.status==='suspect'
+    ? '<button type="button" class="mini" data-review="approve">已试听，保留字幕</button>' : '';
   if (m) {
-    if(hasCompletedModification(cue))return merge + '<details class="match-alternatives"><summary>文字已确认 · 历史参考'+(m.reference?.source_name?' · '+escapeHtml(m.reference.source_name):'')+'</summary><p class="match-metrics">当前修改已保留，原始识别记录不变。</p></details>';
+    if(hasCompletedModification(cue))return '<details class="match-alternatives"><summary>历史参考'+(m.reference?.source_name?' · '+escapeHtml(m.reference.source_name):'')+' <span class="match-inline-note">原识别记录保留</span></summary></details>';
     details = '<details class="match-alternatives"><summary>' + escapeHtml(m.stale ? '参考待复核' : m.label || '匹配详情') + ' · ' + score(m.score) + (m.reference?.source_name?' · '+escapeHtml(m.reference.source_name):'') + '</summary>' +
       '<p class="match-metrics">字符 ' + score(m.character_score) + ' · 拼音 ' + score(m.pinyin_score) + '</p>' +
       (m.warning?'<p class="match-context">'+escapeHtml(m.warning)+'</p>':'') +
       (m.status === 'ambiguous' ? '<button type="button" class="mini" data-review="confirm" data-tip="确认当前参考位置，再手动采用文字。">确认当前位置</button>' : '') +
       (m.alternatives || []).map((c,j) => '<div class="match-candidate"><p>'+escapeHtml(subtitleText(c.text))+'</p><small>'+escapeHtml(c.source_name || '')+' · 第 '+c.paragraph_start+' 段 · '+score(c.score)+'</small>'+(m.status==='ambiguous' && !c.group_only && !c.reference_only ? '<button type="button" class="mini" data-review="candidate" data-candidate="'+j+'">选择此位置</button>' : '')+'</div>').join('')+'</details>';
   }
-  return merge + details;
+  return details + approve;
 }
 
 let searchCursor = -1;
@@ -2171,12 +2312,17 @@ function filteredRows() {
   return state.cues
     .map((cue, i) => ({ cue, i }))
     .filter(({ cue, i }) => {
-      const status=cueVerification(cue)?.status;
-      if (state.filter === "low" && ['passed','modified'].includes(status) && !cue.merge_suggestion) return false;
-      if (state.filter === "noise" && (!cue.is_noise || ['passed','modified'].includes(status))) return false;
-      if (state.filter === "edited" && !hasCompletedModification(cue)) return false;
+      const {calibration,alignment}=cueStageStatuses(cue),statuses=[calibration,alignment];
+      if(state.filter==='minor'&&!statuses.some(s=>s.status==='suspect'&&!s.obvious))return false;
+      if(state.filter==='obvious'&&!statuses.some(s=>s.status==='suspect'&&s.obvious))return false;
+      if(state.filter==='unchecked'&&calibration.status!=='unchecked')return false;
+      if(state.filter==='unaligned'&&alignment.status!=='unchecked')return false;
+      if(state.filter==='calibrated'&&calibration.label!=='校准通过')return false;
+      if(state.filter==='verified'&&calibration.label!=='校验通过')return false;
+      if(state.filter==='edited'&&calibration.status!=='passed')return false;
+      if(state.filter==='aligned'&&alignment.status!=='passed')return false;
       if (q) {
-        const hay = `${cue.display_id ?? i + 1} ${i + 1} ${cue.text || ""} ${cue.script_text || ""} ${cue.role || ""}`.toLowerCase();
+        const hay = `${cue.display_id ?? i + 1} ${i + 1} ${cue.text || ""} ${cue.manual_reference ?? cue.script_text ?? ""} ${cue.role || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -2196,42 +2342,47 @@ function findCueMatch(backwards = false) {
 }
 
 function suggestHtml(cue, i) {
-  const body = cue.script_text
-    ? `<div class="sugg-text">${escapeHtml(subtitleText(cue.script_text))}</div>`
-    : '<div class="sugg-text muted">'+(cue.reference_match?.status==='context_mismatch'?'当前片段无此台词':cue.reference_match?'无参考内容':'尚无参考')+'</div>';
-  return `<div class="field-box">${body}</div>`;
+  const text = cue.manual_reference ?? cue.script_text ?? '';
+  const placeholder = cue.reference_match?.status==='context_mismatch'?'当前片段无此台词，可补写参考':'无参考，可补写';
+  return (cue.manual_reference_needs_review?'<small class="muted">手动参考拆分后请复核</small>':'')
+    + `<div class="field-box"><div class="sugg-text cue-reference" contenteditable="true" spellcheck="false" role="textbox" aria-label="第${i+1}条参考文字" data-placeholder="${placeholder}">${escapeHtml(subtitleText(text))}</div></div>`;
+}
+
+function editCueReference(cue, text) {
+  cue.manual_reference = mergeEditedCueText(cue.manual_reference ?? cue.script_text ?? '', text);
+  cue.manual_reference_needs_review = false;
+}
+
+function useCueReference(cue) {
+  const text = subtitleText(cue.manual_reference ?? cue.script_text ?? '');
+  if (!text.trim()) return false;
+  cue.text = text;
+  cue.words = [];
+  if (cue.alignment) cue.alignment = {...cue.alignment, stale:true};
+  if (cue.reference_match) cue.reference_match = {...cue.reference_match, stale:true};
+  completeModification(cue);
+  cue.review_decision = 'manual';
+  if(cue.hallucination)cue.hallucination={...cue.hallucination,dismissed:true};
+  releaseVerificationExclusions([cue]);
+  return true;
 }
 
 function badgesHtml(cue) {
   const out = [];
-  const verification=cueVerification(cue);
   if (cue.role) out.push(`<span class="badge">${escapeHtml(cue.role)}</span>`);
   if (cue.confidence != null) {
     const pct = Math.round(cue.confidence * 100);
-    out.push(`<span class="badge ${pct < 45 ? "low" : ""}">置信 ${pct}%</span>`);
+    out.push(`<span class="badge" data-tip="原识别模型评分，并非正确率或时间对齐准确率；拆条后可能共享原段评分，校准不会重算。">原识别评分 ${pct}%</span>`);
   }
-  if(verification) {
-    out.push(`<span class="badge ${verification.status==='modified'?'modified-done':verification.status==='passed'?'verified':verification.obvious?'noise':'low'}" data-tip="${escapeHtml(verification.reason)}">${verification.label}</span>`);
-  } else if(cueNeedsReview(cue))out.push('<span class="badge low">疑似问题</span>');
-  if(hasCompletedModification(cue)&&verification?.status!=='modified')out.push('<span class="badge modified-done" data-tip="文字已确认，时间和版式问题仍需复核">文字已确认</span>');
-  if (cue.merge_suggestion) out.push(`<span class="badge noise merge-suggest" data-tip="${escapeHtml(cue.merge_suggestion.reason || '疑似拆出的短碎片')}；勾选相邻字幕并点击“合并”。">建议合并</span>`);
-  const widthSplit=cue.width_split===true || (cue.width_split==null && cue.source==='split' && cue.segmentation==='dynamic_programming_word_pause');
-  if (widthSplit && ['split','gap_split'].includes(cue.source)) out.push('<span class="badge split">已分段</span>');
-  if (cue.estimated && verification?.status!=='modified') out.push('<span class="badge low">时间估算</span>');
+  for(const [stage,status] of Object.entries(cueStageStatuses(cue))) {
+    const css=status.status==='passed'?'verified':status.status==='suspect'?(status.obvious?'noise':'low'):'pending';
+    const name=stage==='calibration'?'校准':'对齐';
+    out.push(`<span class="badge ${css}" data-stage="${stage}" data-status="${status.status}" data-tip="${escapeHtml(name+'：'+status.reason)}">${status.label}</span>`);
+  }
   return out.join("") || '<span class="badge">—</span>';
 }
 
-function renderReferenceGaps() {
-  const panel=$('#referenceGaps');if(!panel)return;
-  const gaps=state.referenceGaps||[];
-  panel.hidden=state.settings.mode!=='align'||!gaps.length;
-  panel.innerHTML='<b>疑似漏句 · '+gaps.length+' 处</b><p>参考有、字幕未覆盖；请试听确认，不会自动插入。</p>'+gaps.map(g=>
-    '<button type="button" data-gap-cue="'+g.after_cue+'"><small>#'+(g.after_cue+1)+' 与 #'+(g.before_cue+1)+' 之间 · '+escapeHtml(g.source_name||'参考')+'</small><span>'+escapeHtml(subtitleText(g.text))+'</span></button>').join('');
-  panel.onclick=event=>{const button=event.target.closest('[data-gap-cue]');if(button&&state.cues[Number(button.dataset.gapCue)])selectCue(Number(button.dataset.gapCue));};
-}
-
 function renderTable() {
-  renderReferenceGaps();
   const previousVerificationCache = verificationCache;
   verificationCache = new Map();
   try {
@@ -2247,18 +2398,18 @@ function renderTableBody() {
   const rows = filteredRows();
   cueBody.innerHTML = rows.map(({ cue, i }) => {
     const verification=cueVerification(cue),passed=['passed','modified'].includes(verification?.status);
-    const textClass = `${passed ? 'passed' : ''} ${cue.merge_suggestion?'context-warning':''} ${passed ? '' : `${cue.needs_review || (cue.confidence != null && cue.confidence < 0.45) ? "low" : ""} ${cue.is_noise ? "noise" : ""} ${verification?.obvious?'context-warning':''}`}`;
+    const textClass = cueTextClass(cue);
     return `<tr data-i="${i}" class="script-line ${cueExcluded(cue) ? 'excluded' : ''} ${state.selectedCues.has(i) ? "selected" : ""} ${i === state.playingIndex ? 'playing' : ''}">
       <td class="idx"><input type="checkbox" class="cue-pick" ${state.selectedCues.has(i)?'checked':''} aria-label="选择字幕 ${escapeHtml(cue.display_id)}"><b>${escapeHtml(cue.display_id)}</b><span class="cue-time-range"><input class="time" data-field="start" value="${fmtCueTime(cue.start)}" aria-label="第${i+1}条开始时间"><span>→</span><input class="time" data-field="end" value="${fmtCueTime(cue.end)}" aria-label="第${i+1}条结束时间"></span><span class="badges">${badgesHtml(cue)}</span></td>
       <td class="cue-current"><div class="field-box"><div class="cue-text ${textClass}" aria-label="第${i+1}条字幕" contenteditable="true" spellcheck="false">${escapeHtml(editableCueText(cue.text))}</div></div></td>
+      <td class="cue-adopt"><button type="button" class="adopt-reference" data-review="use-reference" aria-label="采用右侧参考到左侧字幕" data-tip="采用右侧参考到左侧字幕">←</button></td>
       <td class="suggest" aria-label="第${i+1}条参考">${suggestHtml(cue, i)}</td>
       <td class="cue-review">${cueReviewHtml(cue,i)}</td>
     </tr>`;
   }).join("");
   emptyHint.style.display = state.cues.length ? "none" : "";
   emptyHint.textContent = state.cues.length ? "" : "选择视频 → 提取字幕，或导入 SRT";
-  const stats = cueStatistics(state.cues);
-  $("#cueCount").textContent = `共 ${stats.total} 条 · 已对齐 ${stats.aligned} 条 · 疑似 ${stats.suspect} 条${rows.length !== stats.total ? `（显示 ${rows.length}）` : ""}`;
+  updateCueCount(rows.length);
   updateWidthInfo();
   if (state.selected >= 0 && state.cues[state.selected]) {
     const c = state.cues[state.selected];
@@ -2268,6 +2419,12 @@ function renderTableBody() {
   }
   updateButtons();
   drawWave();
+}
+
+function updateCueCount(visibleCount = null) {
+  const stats=cueStatistics(state.cues);
+  const count=visibleCount ?? cueBody.querySelectorAll('tr[data-i]:not([hidden])').length;
+  $('#cueCount').textContent=`共 ${stats.total} 条 · 已对齐 ${stats.aligned} 条 · 待复核 ${stats.suspect} 条${count!==stats.total?`（显示 ${count}）`:''}`;
 }
 
 function renderSubtitleSource(animate = false) {
@@ -2296,10 +2453,9 @@ function renderSubtitleSource(animate = false) {
 function renderAll() {
   renderMediaMeta();
   renderSubtitleSource();
-  updateModeNote();
   renderTable();
+  // 同步剧本区时统一刷新模式与按钮，避免同一次整页刷新重复遍历字幕。
   renderScript();
-  updateButtons();
 }
 
 // ---------- 选择/编辑 ----------
@@ -2449,26 +2605,20 @@ function applyTimingSettings() {
 }
 
 function findCueAt(t, includeExcluded = false) {
-  return (includeExcluded?state.cues:presentationCues()).find(c => t >= c.start && t < c.end) || null;
-}
-
-function canAdoptCue(cue) {
-  const match=cue?.reference_match;
-  const source=match?.reference?.text||cue?.script_text;
-  return !!(source && match?.reference && !match.stale && !match.reference.reference_only
-    && (match.query_text==null || match.query_text===cue.text)
-    && (match.status!=='ambiguous' || match.candidate_confirmed)
-    && simplifiedText(source)!==cue.text);
-}
-
-function adoptCue(cue) {
-  cue.text=simplifiedText(cue.reference_match?.reference?.text||cue.script_text);cue.words=[];cue.edited=true;
-  delete cue.merge_suggestion;
-  delete cue.interjection;
-  cue.review_decision='adopted';cue.match_needs_review=false;
-  cue.reference_match={...cue.reference_match,status:'high',label:'参考一致',query_text:cue.text,stale:false,differences:[]};
-  if(cue.alignment)cue.alignment={...cue.alignment,stale:true};
-  completeModification(cue);
+  const cues=includeExcluded?state.cues:presentationCues(),key=includeExcluded?'rawCueIndex':'visibleCueIndex';
+  let cached=state[key];
+  if(!cached||cached.cues!==cues||cached.revision!==state.editRevision||state.operation==='校时'){
+    const entries=cues.map((cue,index)=>({cue,index})).sort((a,b)=>a.cue.start-b.cue.start);
+    let end=-Infinity;const ends=entries.map(item=>(end=Math.max(end,item.cue.end)));
+    cached=state[key]={cues,revision:state.editRevision,entries,ends};
+  }
+  const {entries,ends}=cached;let lo=0,hi=entries.length;
+  while(lo<hi){const mid=(lo+hi)>>1;if(entries[mid].cue.start<=t)lo=mid+1;else hi=mid;}
+  let found=null,first=Infinity;
+  for(let i=lo-1;i>=0&&ends[i]>t;i--){
+    const item=entries[i];if(t<item.cue.end&&item.index<first){found=item.cue;first=item.index;}
+  }
+  return found;
 }
 
 async function calibrateAll() {
@@ -2478,13 +2628,20 @@ async function calibrateAll() {
   if(!indices.length)return;
   if(!state.script.length){toast('请先导入参考文本并执行对比校验','info');return;}
   if(state.versionMismatch){toast('请先保存并重启后台，再执行新版校准','error');return;}
+  if(state.settings.mode==='align'&&!state.cues.some(cue=>cue.reference_match)){
+    if(!await matchScript(true))return;
+  }
+  const fingerprint=documentFingerprint(state.scriptDocument,state.script);
+  if(state.referenceFingerprint&&fingerprint!==state.referenceFingerprint){
+    toast('参考正文或来源已变化，请重新执行对比校验后再校准','error',9000);return;
+  }
   const before=snapshot(),beforeCues=JSON.parse(JSON.stringify(state.cues));
   const path=projectPath(),epoch=state.mediaEpoch,started=Date.now(),previous=state.operation;
   state.operation='校准字幕';updateButtons();
   try{
     const result=await api('/api/segment',{mode:'calibration',cues:indices.map(i=>state.cues[i]),
-      max_width:state.settings.width||20,gap_seconds:state.settings.gap??.6,
-      keep_punc:state.settings.keepPunc!==false,keep_interjections:state.settings.keepInterjections===true});
+      reference_fingerprint:state.referenceFingerprint||undefined,
+      keep_punc:state.settings.keepPunc!==false});
     if(!sameDocument(path,epoch,before))throw new Error('字幕已变化，已保留当前修改，请重新校准');
     if(result.mode!=='reference_copy'||!Array.isArray(result.cues)||result.cues.length!==indices.length)
       throw new Error('后台未启用文字校准接口，请保存并重启程序；未采用旧版拆条结果');
@@ -2494,47 +2651,20 @@ async function calibrateAll() {
       if(next.start!==original.start||next.end!==original.end||(original.id!=null&&next.id!==original.id))
         throw new Error('校准返回了结构或时间变化，已拒绝采用，请重启后台');
       all[indices[offset]]={...original,...next};
-      if(completed.has(offset))completeModification(all[indices[offset]]);
+      all[indices[offset]].verification_stage='calibrate';all[indices[offset]].content_stage='calibrate';
+      if(completed.has(offset)&&!hasCompletedModification(original))completeModification(all[indices[offset]],'calibration');
     }
     state.cues=all;
     showVerificationReport('校准',beforeCues,state.cues,{requireReference:true});
     updateJob({status:'done',progress:1,message:'校准完成',finished:Date.now()/1000,elapsed_seconds:(Date.now()-started)/1000});
-    toast(`按对应参考修正 ${result.changed_indices?.length||0} 条 · ${result.pending_indices?.length||0} 条待复核 · 条目、时间与删除结果保留；下一步可执行对齐字幕`,'success',9000);
+    const remaining=verificationStatistics(state.cues,{requireReference:true});
+    toast(`本次校准 ${indices.length} 条，修正 ${result.changed_indices?.length||0} 条 · 全工程仍有轻微错误 ${remaining.suspect} 项、明显错误 ${remaining.obvious} 项；请人工复核后对齐`,'success',9000);
   }catch(error){toast(error.message,'error',9000);}
   finally{
     state.operation=previous;
     if(projectPath()===path&&state.mediaEpoch===epoch&&snapshot()!==before){pushHistory(before);scheduleSave();}
     renderAll();updateOverlay();updateButtons();
   }
-}
-
-function markNoReference(cue) {
-  cue.script_text='';cue.script_index=null;cue.match_ratio=null;cue.match_needs_review=true;
-  cue.reference_match={status:'unmatched',label:'无参考内容',query_text:cue.text,reference:null,
-    stale:false,score:0,alternatives:[],warning:'没有可靠参考内容，原字幕保持不变'};
-}
-
-function markReview(i, decision) {
-  if (editLocked() || !state.cues[i]) return;
-  const before = snapshot(), cue = state.cues[i];
-  cue.review_decision = decision;
-  cue.exclude_export = decision === 'non_script';
-  delete cue.interjection_excluded;
-  delete cue.verification_excluded;
-  if (decision === 'included' && cue.hallucination) {
-    // 用户确认要导出后，不再重复提示、也不再自动排除；重新载入工程时保持这个决定。
-    cue.hallucination = { ...cue.hallucination, dismissed: true };
-    cue.is_noise = false;
-  }
-  if (decision === 'kept') { cue.text = cue.original_text; cue.edited = cue.text !== cue.original_text; cue.words = []; delete cue.merge_suggestion; }
-  pushHistory(before); renderAll(); scheduleSave(); updateOverlay();
-}
-
-function highlighted(text, differences, side) {
-  const chars = [...String(text || '')];
-  const ranges = (differences || []).filter(d => d[side + '_end'] > d[side + '_start']);
-  return chars.map((c, i) => ranges.some(d => i >= d[side + '_start'] && i < d[side + '_end'])
-    ? '<mark class="diff-' + side + '">' + escapeHtml(c) + '</mark>' : escapeHtml(c)).join('');
 }
 
 function renderScript() {
@@ -2585,8 +2715,9 @@ function playbackTick() {
 }
 
 function setTimelineHeight(height, persist = false) {
-  const max = Math.max(190, $('.center').clientHeight-260);
-  const value = Math.round(clamp(Number(height)||230,190,max));
+  const controls=$('#subtitleParameters')?.offsetHeight||0,dock=$('#bottomTaskDock')?.offsetHeight||56;
+  const max = Math.max(160, $('.center').clientHeight-controls-dock-190);
+  const value = Math.round(clamp(Number(height)||230,160,max));
   $('#timelinePanel').style.height = value+'px';
   if (persist) writeJson('subtitleStudio.timelineHeight',{height:value});
   drawWave();
@@ -2622,18 +2753,7 @@ function bindTimelineLayout() {
     requestWaveDetail();
   });
   $('.right .table-wrap').addEventListener('wheel',()=>{state.listScrollPauseUntil=Date.now()+2500;},{passive:true});
-  waveCanvas.addEventListener('wheel',e=>{
-    const view=waveWindow();if(!view.duration)return;
-    e.preventDefault();
-    if(!e.shiftKey && Math.abs(e.deltaY)>=Math.abs(e.deltaX)){
-      const r=waveCanvas.getBoundingClientRect(), ratio=clamp((e.clientX-r.left)/r.width,0,1),anchor=view.start+view.span*ratio;
-      state.waveSpan=clamp(view.span*Math.exp(e.deltaY*.003),.5,view.duration);
-      state.waveStart=clamp(anchor-state.waveSpan*ratio,0,Math.max(0,view.duration-state.waveSpan));
-    } else {
-      state.waveStart=clamp(view.start+(e.deltaX||e.deltaY)*view.span/Math.max(1,waveCanvas.clientWidth),0,Math.max(0,view.duration-view.span));
-    }
-    requestWaveDetail();
-  },{passive:false});
+  waveCanvas.addEventListener('wheel',handleWaveWheel,{passive:false});
 }
 
 function focusWave(cue) {
@@ -2759,13 +2879,8 @@ function bindWaveCanvas(canvas) {
       if (earliestEnd > duration) return;
       drag.cue.end = clamp(time, earliestEnd, Math.max(earliestEnd,Math.min(duration,drag.nextStart)));
     }
-    // 手工拖动时间与输入时间同等对待：解除自动变灰，手动“不导出”保留。
-    if(drag.cue.verification_excluded){
-      delete drag.cue.verification_excluded;
-      if(drag.cue.review_decision!=='non_script')drag.cue.exclude_export=false;
-    }
-    completeModification(drag.cue); drag.cue.words = [];
-    if(drag.cue.alignment)drag.cue.alignment.stale=true;
+    // 手工拖动时间与输入时间同等对待：解除旧自动排除，手动“不导出”保留。
+    releaseVerificationExclusions([drag.cue]);
     for(const field of ['start','end']){
       const row=cueBody.querySelector('tr[data-i="'+state.cues.indexOf(drag.cue)+'"] input[data-field="'+field+'"]');
       if(row)row.value=fmtCueTime(drag.cue[field]);
@@ -2778,7 +2893,10 @@ function bindWaveCanvas(canvas) {
     if(drag.pointerId!==event.pointerId)return;
     const saved = drag; drag = null; state.operation = '';
     if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-    if (saved.epoch === state.mediaEpoch) { pushHistory(saved.before); renderAll(); scheduleSave(); }
+    if (saved.epoch === state.mediaEpoch) {
+      if(saved.cue.start!==saved.initialStart||saved.cue.end!==saved.initialEnd)confirmCueTiming(saved.cue);
+      pushHistory(saved.before); renderAll(); scheduleSave();
+    }
     updateButtons();
   };
   canvas.addEventListener('pointerup', finish); canvas.addEventListener('pointercancel', finish);
@@ -2798,6 +2916,7 @@ async function matchScript(silent = false, forceIndices = []) {
     return false;
   }
   const before = snapshot(), path = projectPath(), epoch = state.mediaEpoch;
+  const selectedBefore=new Set(state.selectedCues);
   const scriptFingerprint = JSON.stringify(state.scriptDocument || state.script);
   const previousOperation = state.operation;
   state.operation = '匹配剧本'; updateButtons();
@@ -2810,20 +2929,24 @@ async function matchScript(silent = false, forceIndices = []) {
         ambiguity:state.settings.matchAmbiguity, max_group:state.settings.matchGroup}, force_indices:forceIndices });
     if (!sameDocument(path, epoch, before) || scriptFingerprint !== JSON.stringify(state.scriptDocument || state.script)) throw new Error('字幕或剧本已变化，已保留当前修改，请重新匹配');
     state.script = d.lines;
-    state.scriptDocument = d.document; state.referenceGaps = d.gaps || [];
-    replaceCues(d.cues.map(cue=>({...cue,modification_complete:false})), { before });
-    // 校验关只判定内容：通过标签记为“参考一致”，问题标签保持通用。
+    state.scriptDocument = d.document;
+
+    replaceCues(d.cues.map((cue,i)=>({...cue,modification_complete:hasCompletedModification(cue)&&!forceIndices.includes(i)?cue.modification_complete:false})), { before });
+    state.selectedCues=new Set([...selectedBefore].filter(i=>state.cues[i]));
+    bindReferenceMatches(documentFingerprint(state.scriptDocument, state.script));
+    // 校验关只判定内容：通过标签记为“校验通过”，问题标签统一为轻微错误/明显错误。
     const stamp = forceIndices.length ? forceIndices.filter(i=>state.cues[i]) : state.cues.map((_,i)=>i);
-    stamp.forEach(i=>{state.cues[i].verification_stage='verify';});
+    stamp.forEach(i=>{state.cues[i].verification_stage='verify';state.cues[i].content_stage='verify';});
     releaseVerificationExclusions(state.cues, stamp);
     // replaceCues 已先渲染过一版，阶段标记和解除旧排除写入后要再刷新一次表格与保存。
     renderAll();scheduleSave();
     const stats = verificationStatistics(state.cues,{requireReference:true});
     const first = d.lines.find(line => line.cue_index != null);
-    if (first) { selectCue(first.cue_index); focusWave(state.cues[first.cue_index]); }
+    // 自动定位只移动播放位置，不改变用户勾选的校准范围。
+    if (first) { selectCue(first.cue_index,true,true); focusWave(state.cues[first.cue_index]); }
     const interjections = d.cues.filter(cue => cue.interjection).length;
     if (!silent) toast('已校验 ' + (d.stats?.total || 0) + ' 条 · ' + (d.stats?.needs_review || 0) + ' 条需复核'
-      + ` · 参考一致 ${stats.passed} 条 · 疑似 ${stats.suspect} 条 · 明显问题 ${stats.obvious} 条`
+      + ` · 校验通过 ${stats.passed} 条 · 轻微错误 ${stats.suspect} 条 · 明显错误 ${stats.obvious} 条`
       + (interjections ? ` · 语气词 ${interjections} 条已标红` : '') + '，未改写字幕', 'success');
     return true;
   } catch (e) { toast(e.message, 'error'); return false; }
@@ -2831,7 +2954,7 @@ async function matchScript(silent = false, forceIndices = []) {
 }
 
 async function startAsr(task = 'asr', region = null, options = {}) {
-  if (state.jobId || state.submitting || (state.batchRecognition&&!options.batch) || state.operation || state.loading || state.uploading || state.scriptUploading || state.scriptPickerOpen) return null;
+  if (state.jobId || state.submitting || (state.batchRecognition&&!options.batch) || state.operation || state.loading || state.uploading || state.scriptUploading || state.scriptPickerOpen || state.mediaPickerOpen) return null;
   if (state.versionMismatch) { toast('后台版本已过期，请先保存工程并重启程序', 'error'); return null; }
   if (state.detachedJob && !options.resume) { toast('有尚未取回的任务，请点击“继续查询原任务”，避免重复处理', 'info'); return null; }
   if (!state.media || (task !== 'align' && !modelAvailable())) { toast('请先选择素材和可用模型', 'error'); return null; }
@@ -2907,6 +3030,7 @@ async function startAsr(task = 'asr', region = null, options = {}) {
         throw new Error('字幕已变化，已保留当前修改；请重新处理所选字幕');
       }
       let nextCues=job.cues || [];
+      if(task==='align')nextCues.forEach(cue=>confirmCueTiming(cue,'model'));
       if(region){
         // 本段只识别到语气词时允许删除原条目；真的没识别到内容才保留原字幕。
         if(!nextCues.length && !(job.info?.interjections?.count > 0) && !(job.info?.interjections_removed > 0))throw new Error('本段未识别到字幕，已保留原内容');
@@ -2928,10 +3052,12 @@ async function startAsr(task = 'asr', region = null, options = {}) {
 
       if (!(await saveProject(false))) throw new Error('识别已完成，工程保存失败，请先保存或导出');
       updateJob({status:'done',progress:1,message:'完成',finished:Date.now()/1000,elapsed_seconds:(Date.now()-taskStarted)/1000});
-      if(!options.deferCompletionSound)playSound('success');
-      toast(region ? '本段重识别完成，其余字幕已保留' : (task === 'align' ? '时间轴对齐完成：' : '提取成功：') + state.cues.length + ' 条字幕', 'success');
+      const failedAlignment=task==='align'&&job.info?.aligned_count===0&&job.info?.failed_count>0;
+      if(!options.deferCompletionSound&&!failedAlignment)playSound('success');
+      if(failedAlignment)toast('本次未得到可靠对齐时间，请检查字幕与音轨是否一致','error',9000);
+      else toast(region ? '本段重识别完成，其余字幕已保留' : (task === 'align' ? '时间轴对齐完成：' : '提取成功：') + state.cues.length + ' 条字幕', 'success');
       const hallucinated = job.info?.hallucination?.count || 0;
-      if (hallucinated) toast(`已自动排除 ${hallucinated} 条疑似幻觉字幕（预览和导出不含，可在列表中恢复导出或删除）`, 'info', 9000);
+      if (hallucinated) toast(`已标记 ${hallucinated} 条明显异常字幕，内容与导出保留，请试听判断`, 'info', 9000);
       const interjections = job.info?.interjections?.count || 0;
       const removedInterjections = job.info?.interjections_removed || 0;
       const trimmedInterjections = job.info?.interjections_trimmed || 0;
@@ -2995,8 +3121,17 @@ async function alignAndVerify() {
   const taskStarted=Date.now();
   const job = await startAsr('align',null,{deferCompletionSound:true});
   if (job?.status !== 'done') return;
-  // 对齐只改时间和分段：不重跑参考校验，不清“文字已确认”，也不改导出标记。
-  state.cues.forEach(cue=>{cue.verification_stage='align';});
+  if(job.info?.aligned_count===0 && job.info?.failed_count>0){
+    renderAll();updateOverlay();scheduleSave();
+    updateJob({status:'done',progress:1,message:'本次未得到可靠对齐时间，请检查字幕与音轨是否一致',finished:Date.now()/1000,elapsed_seconds:(Date.now()-taskStarted)/1000});
+    toast('本次没有字幕对齐成功；失败条目已标记，请检查文字、原时间范围和音轨','error',9000);
+    return;
+  }
+  // 对齐只改时间和分段：不重跑参考校验，保留校验/校准/修改来源，也不改导出标记。
+  state.cues.forEach(cue=>{
+    if(['verify','calibrate'].includes(cue.verification_stage))cue.content_stage=cue.verification_stage;
+    cue.verification_stage='align';
+  });
   const restored=releaseVerificationExclusions(state.cues);
   renderAll();updateOverlay();updateButtons();scheduleSave();
   const report=showVerificationReport('对齐',beforeCues,state.cues,{requireReference:state.script.length>0});
@@ -3008,8 +3143,11 @@ async function alignAndVerify() {
   if(gapSplits)parts.push(`停顿断句 ${gapSplits} 条`);
   if(widthSplits)parts.push(`按每行字数分段 ${widthSplits} 条`);
   if(durationRepairs)parts.push(`按字数收紧 ${durationRepairs} 条`);
+  const retry=job.info?.local_retry||{};
+  if(retry.accepted)parts.push(`局部重试修正 ${retry.accepted} 条`);
+  if(retry.unresolved)parts.push(`仍无法可靠定位 ${retry.unresolved} 条`);
   const restoredHint=restored?` · 解除旧自动排除 ${restored} 条`:'';
-  toast(`音轨对齐完成 · 改变 ${report.changed} 条 · 自动对齐完成 ${report.after.passed} 条 · 疑似 ${report.after.suspect} 条 · 明显问题 ${report.after.obvious} 条${restoredHint}${parts.length?' · '+parts.join(' · '):''}`,'success',9000);
+  toast(`音轨对齐完成 · 改变 ${report.changed} 条 · 对齐通过 ${report.after.passed} 条 · 轻微错误 ${report.after.suspect} 条 · 明显错误 ${report.after.obvious} 条${restoredHint}${parts.length?' · '+parts.join(' · '):''}`,'success',9000);
 }
 
 function formatElapsed(milliseconds) {
@@ -3071,20 +3209,6 @@ async function rerunSelected() {
   }
 }
 
-function toggleSelectedExport() {
-  if(editLocked())return;
-  const indices=selectedCueIndices();if(!indices.length)return;
-  const include=indices.every(i=>cueExcluded(state.cues[i])),before=snapshot();
-  for(const i of indices){
-    const cue=state.cues[i];cue.exclude_export=!include;cue.review_decision=include?'included':'non_script';
-    delete cue.interjection_excluded;
-    delete cue.verification_excluded;
-    if(include && cue.hallucination){cue.hallucination={...cue.hallucination,dismissed:true};cue.is_noise=false;}
-  }
-  pushHistory(before);renderAll();scheduleSave();updateOverlay();
-  toast(`已将 ${indices.length} 条字幕${include?'恢复导出':'标为不导出'}`,'success');
-}
-
 // ---------- 分段/编辑操作 ----------
 async function doSegment() {
   const selected = selectedCueIndices();
@@ -3099,7 +3223,7 @@ async function doSegment() {
     const result=await api('/api/segment',{cues:[original],max_width:state.settings.width,mode:'midpoint'});
     if(!sameDocument(path,epoch,before))throw new Error('字幕已变化，已保留当前内容');
     if(!result.splits){toast('没有可拆开的完整词边界，已保留原句','info');return;}
-    result.cues.forEach(cue=>{delete cue.merge_suggestion;completeModification(cue);});
+    result.cues.forEach(cue=>completeModification(cue));
     const all=state.cues.slice();all.splice(index,1,...result.cues);
     replaceCues(all,{before});selectCue(index,false);
     if(state.script.length){
@@ -3135,18 +3259,20 @@ async function doMerge() {
     script_text:'',script_index:null,reference_match:null,match_ratio:null,match_needs_review:false,
     alignment:first.alignment?{...first.alignment,stale:true}:null,is_noise:cues.some(c=>c.is_noise),
     needs_review:cues.some(c=>c.needs_review),
-    // 自动变灰只是校验结论，合并后短碎片问题已经解决；只要有一条手动“不导出”，合并结果继续不导出。
-    exclude_export:cues.some(c=>cueExcluded(c)&&!c.verification_excluded),review_decision:'manual'};
-  delete merged.merge_suggestion;
+    // 自动排除已取消；只要有一条手动“不导出”，合并结果继续不导出。
+    exclude_export:cues.some(c=>cueExcluded(c)&&!c.verification_excluded&&!c.interjection_excluded),review_decision:'manual'};
+  if(cues.some(c=>c.manual_reference!=null)){
+    merged.manual_reference=cues.map(c=>c.manual_reference ?? c.script_text ?? '').join('');
+    merged.manual_reference_needs_review=cues.some(c=>c.manual_reference_needs_review);
+  }
   delete merged.verification_excluded;
+  delete merged.interjection_excluded;
   delete merged.segmentation;
   delete merged.split_parent;
   delete merged.pause_after;
   if (Number.isFinite(last.pause_after)) merged.pause_after=last.pause_after;
   if (!(merged.end>merged.start)){toast('合并后的结束时间必须晚于开始时间','error');return;}
   const all=state.cues.slice();all.splice(index,indices.length,merged);
-  // 相邻条目上的旧建议可能指向刚被合并的编号，避免继续显示过期提示。
-  for(const neighbor of [all[index-1],all[index+1]]) if(neighbor) delete neighbor.merge_suggestion;
   completeModification(merged);
   replaceCues(all,{before});selectCue(index,false);toast(`已合并选中的 ${indices.length} 条字幕`,'success');
   if (state.script.length) await rematchDerivedCues([index],{preserveModification:true});
@@ -3169,18 +3295,31 @@ async function resetCues() {
   finally{state.operation='';updateButtons();}
 }
 
-function addCue() {
+async function addCue() {
   if (editLocked()) return;
   const before = snapshot();
+  const path=projectPath(),epoch=state.mediaEpoch,dialog=$('#addCueDialog'),input=$('#addCueText');
+  input.value='';input.setCustomValidity('');dialog.returnValue='';
+  state.operation='添加字幕';updateButtons();
+  let text;
+  try{
+    text=await new Promise(resolve=>{
+      dialog.addEventListener('close',()=>resolve(dialog.returnValue==='add'?input.value.trim():''),{once:true});
+      dialog.showModal();
+    });
+  }finally{state.operation='';updateButtons();}
+  if(!text)return;
+  if(!sameDocument(path,epoch,before)){toast('字幕已变化，请重新添加','info');return;}
   const idx = state.selected >= 0 ? state.selected + 1 : state.cues.length;
   const prev = state.cues[idx - 1];
   const next=state.cues[idx], start=prev?prev.end:(video.currentTime || 0);
   const end=Math.min(start+2,next?.start ?? Infinity,state.media?.duration || Infinity);
   if(end<=start){toast('此处没有空余时间，请先拉开相邻字幕或缩短上一条','error');return;}
   state.cues.splice(idx, 0, normalizeCue({
-    start, end, text: '', edited: true, source: "manual",
+    start, end, text, edited: true, modification_complete:false, source: "manual",
     display_id:String(Math.max(0,...state.cues.map(c=>parseInt(c.display_id,10)||0))+1),
   }, idx));
+  completeModification(state.cues[idx]);
   pushHistory(before);
   state.selected = idx;
   state.selectedCues=new Set([idx]);
@@ -3202,7 +3341,6 @@ function deleteCue() {
   const indices=selectedCueIndices();if(!indices.length)return;
   const before = snapshot();
   const deleted=new Set(indices);state.cues=state.cues.filter((cue,i)=>!deleted.has(i));
-  state.cues.forEach(cue=>delete cue.merge_suggestion);
   pushHistory(before);
   state.selected = -1;
   state.selectedCues=new Set();
@@ -3223,14 +3361,16 @@ async function importSrt(file = null) {
     if (source && !(await saveProject(false))) throw new Error('当前工程尚未保存，已取消导入');
     const parsed = await api('/api/srt/parse', { path: picked.path });
     if (!parsed.cues?.length) throw new Error('没有可导入的字幕');
-    let cues = parsed.cues, restored = false, initial=parsed.cues;
+    let cues = parsed.cues, restored = false, initial=parsed.cues, project = null;
     if (!state.media) {
       const loaded = await api('/api/projects/load?path=' + encodeURIComponent(picked.path));
+      project = loaded.project;
       state.mediaEpoch++;
       state.srtPath = picked.path;
       state.script = loaded.project?.script_lines || [];
       state.scriptDocument = loaded.project?.script_document || null;
       state.scriptName = loaded.project?.script_name || '';
+      state.scriptPath = loaded.project?.script_path || '';
       state.scriptNames = restoredScriptNames(loaded.project);
       projectVersions.set(picked.path, loaded.project?.revision || 0);
       if (loaded.project) {
@@ -3242,13 +3382,14 @@ async function importSrt(file = null) {
     }
     if (requestedMode === 'align') setMode('align', false);
     replaceCues(cues, { reset: !state.media, subtitleFile: { path: picked.path, origin: 'imported' } });
+    if (restored) restoreReferenceBinding(project);
     state.initialCues=JSON.parse(JSON.stringify(initial));
     renderSubtitleSource(true);
     if (!(await saveProject(false))) throw new Error('字幕已导入，但工程尚未保存，请重试');
     const flagged = cues.filter(c => c.hallucination && !c.hallucination.dismissed && c.exclude_export).length;
     toast((restored ? '已恢复SRT工程：' : '已导入：') + cues.length + ' 条'
       + (parsed.warnings?.length ? '，有格式提醒' : '')
-      + (flagged ? `（${flagged} 条疑似幻觉已默认不导出）` : ''), 'success', flagged ? 9000 : 3500);
+      + (flagged ? `（${flagged} 条幻觉标记待人工复核）` : ''), 'success', flagged ? 9000 : 3500);
   } catch (error) { toast(error.message, 'error'); }
   finally { state.operation = ''; updateButtons(); }
 }
@@ -3448,6 +3589,64 @@ function drawWave() {
   }
 }
 
+function projectPayload() {
+  return JSON.parse(JSON.stringify({media_path:state.media?.path||'',source_path:projectPath(),
+    cues:state.cues,initial_cues:state.initialCues,script_lines:state.script,script_name:state.scriptName||'',
+    script_names:state.scriptNames||[],script_document:state.scriptDocument,script_path:state.scriptPath||'',
+    reference_fingerprint:state.referenceFingerprint||'',
+    subtitle_file:state.subtitleFile,settings:collectSettings()}));
+}
+
+async function cacheProjectDraft(source=projectPath(),payload=null,revision=state.editRevision) {
+  if(!source||!window.SubtitleDrafts)return false;
+  try{
+    await window.SubtitleDrafts.put(source,payload||projectPayload(),revision,projectVersions.get(source)||0);
+    return true;
+  }catch(error){
+    if(!state.draftErrorShown){state.draftErrorShown=true;toast('本地草稿保存失败，请及时保存工程或导出字幕：'+error.message,'error',9000);}
+    return false;
+  }
+}
+
+async function showLocalDrafts(open=false) {
+  if(!window.SubtitleDrafts)return;
+  try{
+    const records=await window.SubtitleDrafts.list();state.localDrafts=records;
+    $('#btnDrafts').hidden=!records.length;
+    if(!open)return;
+    $('#draftList').innerHTML=records.map((r,i)=>'<button type="button" data-draft="'+i+'"><b>'+escapeHtml(r.source.split(/[\\/]/).pop())+'</b><span>'+escapeHtml(new Date(r.updatedAt).toLocaleString())+' · '+(r.payload.cues?.length||0)+' 条字幕</span></button>').join('')||'<p>没有未保存的本地草稿</p>';
+    $('#draftDialog').showModal();
+  }catch(error){if(open)toast('无法读取本地草稿：'+error.message,'error');}
+}
+
+async function recoverProjectDraft(key) {
+  if(editLocked())return;
+  state.operation='恢复草稿';updateButtons();
+  try{
+  const record=await window.SubtitleDrafts.get(key);if(!record)return;
+  if(state.dirty&&!await cacheProjectDraft()){toast('当前修改无法备份，已停止恢复草稿','error');return;}
+  let current=null;
+  try{current=await api('/api/projects/load?path='+encodeURIComponent(record.source));}catch{}
+  const p=record.payload;
+  state.recoveredDraft={key:record.key,version:record.version??record.updatedAt,source:record.source};
+  video.pause();video.removeAttribute('src');video.load();
+  state.mediaEpoch++;state.media=null;state.srtPath=record.source;state.waveform=null;resetWaveDetail();
+  state.script=p.script_lines||[];state.scriptDocument=p.script_document||null;
+  state.scriptName=p.script_name||'';state.scriptNames=restoredScriptNames(p);state.scriptPath=p.script_path||'';
+  state.cues=(p.cues||[]).map(normalizeCue).filter(cue=>cue.text.trim());state.initialCues=p.initial_cues?.map(normalizeCue).filter(cue=>cue.text.trim())||null;
+  state.subtitleFile=p.subtitle_file||null;state.selected=-1;state.selectedCues=new Set();state.history=[];state.redoStack=[];
+  if(p.settings)applyProjectSettings(p.settings);
+  restoreReferenceBinding(p);projectVersions.set(record.source,record.baseRevision||0);
+  const conflict=current&&(current.revision??0)!==(record.baseRevision||0);
+  if(conflict)projectConflicts.add(record.source);
+  state.editRevision=Math.max(state.editRevision,record.editRevision)+1;state.dirty=true;
+  $('#videoEmpty').hidden=false;$('#videoEmpty').textContent='本地草稿已恢复，可重新关联素材继续校对';
+  $('#btnRelinkMedia').hidden=false;$('#draftDialog').close();
+  await cacheProjectDraft();renderAll();updateOverlay();
+  setSaveState(conflict?'草稿已恢复，服务器版本有变化，请先处理保存冲突':'本地草稿已恢复，请保存工程');
+  }finally{state.operation='';updateButtons();}
+}
+
 async function saveProject(silent = false, options = {}) {
   const source = projectPath();
   if (!source) {
@@ -3455,18 +3654,25 @@ async function saveProject(silent = false, options = {}) {
     return true;
   }
   clearTimeout(state.saveTimer);
+  clearTimeout(state.draftTimer);
   const revision = state.editRevision;
-  const payload = JSON.parse(JSON.stringify({ media_path: state.media?.path || '', source_path: source,
-    cues: state.cues, initial_cues: state.initialCues, script_lines: state.script, script_name: state.scriptName || '', script_names: state.scriptNames || [], script_document: state.scriptDocument, script_path:state.scriptPath||'',
-    subtitle_file: state.subtitleFile, settings: collectSettings() }));
+  const payload = projectPayload();
+  const draft=cacheProjectDraft(source,payload,revision);
   state.pendingSaves++;
   if (!silent) setSaveState('保存中…');
   const task = projectSaveChain.then(async () => {
     try {
       if (projectConflicts.has(source)) { setSaveState('保存冲突，请备份本页并载入最新工程'); return false; }
       payload.expected_revision = projectVersions.get(source) || 0;
+      await draft;
       const result = await api('/api/projects/save', payload, null, options);
       projectVersions.set(source, result.revision);
+      try{
+        const recovered=state.recoveredDraft;
+        if(recovered?.source===source){await window.SubtitleDrafts?.clearRecovered(recovered.key,recovered.version);state.recoveredDraft=null;}
+        const remaining=await window.SubtitleDrafts?.clearThrough(source,revision,result.revision);
+        if(remaining!=null)$('#btnDrafts').hidden=remaining===0;
+      }catch{}
       if (projectPath() === source && state.editRevision === revision) {
         state.dirty = false;
         if (!silent) setSaveState('已保存 ' + String(result.updated_at).slice(11));
@@ -3475,7 +3681,8 @@ async function saveProject(silent = false, options = {}) {
     } catch (error) {
       if (error.status === 409) projectConflicts.add(source);
       if (projectPath() === source) {
-        state.dirty = true; setSaveState('保存失败，修改仍保留');
+        state.dirty = true; setSaveState(await draft?'保存失败，本地草稿已保留':'保存失败，修改仍保留');
+        if(await draft)$('#btnDrafts').hidden=false;
         $('#btnResolveConflict').hidden = !projectConflicts.has(source);
         if (!silent || error.status === 409) toast(error.message, 'error', 8000);
       }
@@ -3498,20 +3705,21 @@ async function resolveProjectConflict() {
     await projectSaveChain;
     const payload = {source_path:source, media_path:state.media?.path || '', cues:state.cues,
       initial_cues:state.initialCues, script_lines:state.script, script_name:state.scriptName,
-      script_names:state.scriptNames, script_document:state.scriptDocument,script_path:state.scriptPath||'',
+      script_names:state.scriptNames, script_document:state.scriptDocument,script_path:state.scriptPath||'',reference_fingerprint:state.referenceFingerprint||'',
       subtitle_file:state.subtitleFile, settings:collectSettings()};
     const backup = await api('/api/projects/backup', payload);
     const loaded = await api('/api/projects/load?path='+encodeURIComponent(source)), p = loaded.project;
     if (!p) throw new Error('最新工程不存在，本页修改及备份已保留');
     if (!sameDocument(source,epoch,before)) throw new Error('本页内容已变化，已保留当前修改及备份，请重新处理');
     state.script = p.script_lines || []; state.scriptDocument = p.script_document || null;
-    state.scriptName = p.script_name || ''; state.scriptNames = restoredScriptNames(p);
-    state.initialCues = p.initial_cues?.map(normalizeCue) || null;
+    state.scriptName = p.script_name || ''; state.scriptNames = restoredScriptNames(p); state.scriptPath = p.script_path || '';
+    state.initialCues = p.initial_cues?.map(normalizeCue).filter(cue=>cue.text.trim()) || null;
     state.subtitleFile = p.subtitle_file?.path ? p.subtitle_file : null;
     if (p.settings) applyProjectSettings(p.settings);
-    state.cues = (p.cues || []).map(normalizeCue);
+    state.cues = (p.cues || []).map(normalizeCue).filter(cue=>cue.text.trim());
+    restoreReferenceBinding(p);
     state.history = []; state.redoStack = []; state.selected = -1; state.selectedCues = new Set();
-    state.editBefore = null; state.pendingResult = null; state.referenceGaps = [];
+    state.editBefore = null; state.pendingResult = null;
     state.editRevision++; state.dirty = false;
     projectVersions.set(source,loaded.revision ?? p.revision ?? 0);
     projectConflicts.delete(source); $('#btnResolveConflict').hidden = true;
@@ -3524,6 +3732,8 @@ async function resolveProjectConflict() {
 function scheduleSave() {
   if (!projectPath() && !state.cues.length && !state.script.length) return;
   state.editRevision++; state.dirty = true;
+  clearTimeout(state.draftTimer);
+  state.draftTimer=setTimeout(()=>{if(state.dirty)cacheProjectDraft();},250);
   setSaveState(projectPath() ? '未保存' : '字幕未保存，请先导出SRT');
   clearTimeout(state.saveTimer);
   if (projectPath()) state.saveTimer = setTimeout(() => saveProject(false), SAVE_DELAY);
@@ -3544,13 +3754,13 @@ async function showProjectLibrary() {
   try{
     const result=await api('/api/projects');state.recentProjects=result.projects || [];
     state.projectDirectory=result.directory||'';
-    $('#projectList').innerHTML=state.recentProjects.map((p,i)=>'<button type="button" data-project="'+i+'" '+(!p.available?'disabled':'')+' title="'+escapeHtml(p.source_path)+'"><b>'+escapeHtml(p.name)+'</b><span>'+escapeHtml(p.updated_at)+' · '+p.count+' 条字幕'+(!p.available?' · 素材已移动或不存在':'')+'</span></button>').join('') || '<p class="muted">暂无保存的项目</p>';
+    $('#projectList').innerHTML=state.recentProjects.map((p,i)=>'<button type="button" data-project="'+i+'" title="'+escapeHtml(p.source_path)+'"><b>'+escapeHtml(p.name)+'</b><span>'+escapeHtml(p.updated_at)+' · '+p.count+' 条字幕'+(!p.available?' · 素材失联，仍可打开字幕':'')+'</span></button>').join('') || '<p class="muted">暂无保存的项目</p>';
   }catch(error){$('#projectList').textContent=error.message;}
 }
 
-async function openSavedProject(source) {
+async function openSavedProject(source, available=true) {
   if(editLocked())return;
-  if(!/\.srt$/i.test(source)){
+  if(available&&!/\.srt$/i.test(source)){
     if(await loadMedia(source,{restore:true}))scheduleConfigSave();
     return;
   }
@@ -3563,11 +3773,14 @@ async function openSavedProject(source) {
     state.mediaEpoch++;state.media=null;state.srtPath=source;state.waveform=null;resetWaveDetail();state.waveSpan=0;state.waveStart=0;
     state.script=p.script_lines || [];state.scriptDocument=p.script_document || null;state.scriptName=p.script_name || '';state.scriptPath=p.script_path||'';
     state.scriptNames=restoredScriptNames(p);
-    state.initialCues=p.initial_cues?.map(normalizeCue) || null;
-    state.referenceGaps=[];state.pendingResult=null;state.playingIndex=-1;
+    state.initialCues=p.initial_cues?.map(normalizeCue).filter(cue=>cue.text.trim()) || null;
+    state.pendingResult=null;state.playingIndex=-1;
     projectVersions.set(source,result.revision ?? p.revision ?? 0);
     if(p.settings)applyProjectSettings(p.settings);
     replaceCues(p.cues || [],{reset:true,subtitleFile:p.subtitle_file?.path?p.subtitle_file:{path:source,origin:'imported'}});
+    restoreReferenceBinding(p);
+    $('#videoEmpty').textContent=available?'选择视频后在这里预览':'素材已失联，可继续编辑和导出 SRT；点击“重新关联素材”恢复试听';
+    $('#btnRelinkMedia').hidden=available;
     scheduleConfigSave();toast('已打开项目：'+source.split(/[\\/]/).pop(),'success');
   }catch(error){toast(error.message,'error');}
   finally{state.operation='';updateButtons();}
@@ -3580,7 +3793,9 @@ function updateButtons() {
   $('#btnApplyTiming').disabled=locked||!hasCues;
   $('#btnPreviewTiming').textContent=state.timingPreview?'结束预览':'预览微调';
   $('#btnPreviewTiming').setAttribute('aria-pressed',String(!!state.timingPreview));
-  $('#timingPreviewNote').textContent=state.timingPreview?'正在预览微调，尚未应用；导出仍使用编辑区时间':'预览和导出使用编辑区时间；下列微调参数需手动应用';
+  $('#timingAdjustState').textContent=state.timingPreview?'预览中':
+    ['subtitleLead','subtitleTail','subtitleMin','subtitleMax'].some(key=>Number(state.settings[key])>0)?'已设置参数':'未设置';
+  $('#timingPreviewNote').textContent=state.timingPreview?'正在预览微调，尚未应用；导出仍使用编辑区时间':'预览和导出使用编辑区时间；微调参数需手动应用';
   $('#btnResolveConflict').hidden = !projectConflicts.has(projectPath());
   $('#btnResolveConflict').disabled = locked;
   $('#btnOpenProject').disabled=locked;
@@ -3601,19 +3816,21 @@ function updateButtons() {
   $('#btnReset').disabled = locked || !(state.initialCues || state.subtitleFile?.path);
   $('#btnSourceSrt').disabled = locked || (!align && !hasCues);
   $('#btnRealignAll').disabled=locked||!state.media||!hasCues||!state.auxModels.some(m=>m.name==='qwen3-forcedaligner-0.6b'&&m.available);
-  $('#btnCalibrate').disabled = locked || !(hasCues && align);
+  $('#btnCalibrate').disabled = locked || !(hasCues && hasScript && align);
+  $('#btnVerify').disabled = locked || !(hasCues && hasScript && align);
   $('#btnExtract').disabled = locked || (align
     ? !hasCues || !state.script.length
     : !state.media || !modelAvailable());
   $('#btnCancel').disabled = !state.jobId && !state.matchRequest && !state.batchRecognition && !downloadBusy();
   $('#btnCancel').hidden = !state.jobId && !state.matchRequest && !state.batchRecognition && !downloadBusy();
-  $('#mediaClear').disabled = !!(state.jobId || state.submitting || state.operation || state.loading);
+  $('#mediaClear').disabled = !!(state.jobId || state.submitting || state.operation || state.loading || state.mediaPickerOpen || state.scriptUploading || state.scriptPickerOpen);
   $('#scriptClear').disabled = locked;
   $('#btnUseResult').hidden = !state.pendingResult || state.pendingResult.path !== projectPath();
   $('#btnUseResult').disabled = locked;
   for (const id of ['deviceSelect', 'gapInput', 'gapRange', 'widthInput', 'widthRange',
     'arabicNumbers', 'keepPunc', 'wrapSubtitles', 'subtitleLead', 'subtitleTail', 'subtitleMin', 'subtitleMax']) $('#' + id).disabled = locked;
   const gpuButton = $('#gpuDownload');
+  $('#btnRecommendedSettings').disabled = locked;
   if (gpuButton) gpuButton.disabled = locked || downloadBusy() || gpuButton.hidden || gpuButton.dataset.blocked === '1';
   $('#vadCheck').disabled = locked || align;
   $('#vadCheck').closest('label').dataset.tip = align ? '仅人声用于字幕提取；音轨对齐按当前字幕处理，此模式下不适用。' : '提取前检测人声区间，不改变原音频；边界判断自动估计底噪，轻声对白仍保留供模型识别。';
@@ -3631,7 +3848,7 @@ function updateButtons() {
   $$('.mode-btn').forEach(button => { button.disabled = locked; });
   cueBody.querySelectorAll('input.time').forEach(input => { input.disabled = locked; });
   cueBody.querySelectorAll('.cue-pick').forEach(input => { input.disabled = locked; });
-  cueBody.querySelectorAll('.cue-text').forEach(cell => {
+  cueBody.querySelectorAll('.cue-text, .cue-reference').forEach(cell => {
     cell.contentEditable = locked ? 'false' : 'true'; cell.setAttribute('aria-readonly', locked ? 'true' : 'false');
   });
   cueBody.querySelectorAll('button').forEach(button => { button.disabled = locked; });
@@ -3640,9 +3857,90 @@ function updateButtons() {
   window.SubtitleComparison?.maybePrompt();
 }
 
+function defaultShortcuts() {
+  return {play:'Space',save:'Ctrl+S',undo:'Ctrl+Z',redo:'Ctrl+Y',search:'Ctrl+F',waveZoom:'none',wavePan:'alt'};
+}
+
+function shortcutKey(event) {
+  if(['Control','Alt','Shift','Meta','Tab','Escape'].includes(event.key))return '';
+  const key=event.code==='Space'||event.key===' '?'Space':String(event.key||'').toUpperCase();
+  return key?[event.ctrlKey?'Ctrl':'',event.altKey?'Alt':'',event.shiftKey?'Shift':'',event.metaKey?'Meta':'',key].filter(Boolean).join('+'):'';
+}
+
+function matchesShortcut(event, action) {
+  return shortcutKey(event)===(state.shortcuts||defaultShortcuts())[action];
+}
+
+function wheelModifier(event) {
+  const keys=[event.altKey?'alt':'',event.ctrlKey?'ctrl':'',event.shiftKey?'shift':'',event.metaKey?'meta':''].filter(Boolean);
+  return keys.length?keys.join('+'):'none';
+}
+
+function handleWaveWheel(event) {
+  const view=waveWindow();if(!view.duration)return;
+  const shortcuts=state.shortcuts||defaultShortcuts(),modifier=wheelModifier(event);
+  if(modifier!==shortcuts.waveZoom&&modifier!==shortcuts.wavePan)return;
+  event.preventDefault();
+  const unit=event.deltaMode===1?16:event.deltaMode===2?waveCanvas.clientWidth:1;
+  const delta=(Math.abs(event.deltaX)>Math.abs(event.deltaY)?event.deltaX:event.deltaY)*unit;
+  if(!delta)return;
+  if(modifier===shortcuts.wavePan){
+    state.waveStart=clamp(view.start+delta*view.span/Math.max(1,waveCanvas.clientWidth),0,Math.max(0,view.duration-view.span));
+  } else {
+    const rect=waveCanvas.getBoundingClientRect(),ratio=clamp((event.clientX-rect.left)/Math.max(1,rect.width),0,1);
+    const anchor=view.start+view.span*ratio;
+    state.waveSpan=clamp(view.span*Math.exp(clamp(delta,-500,500)*.003),Math.min(.5,view.duration),view.duration);
+    state.waveStart=clamp(anchor-state.waveSpan*ratio,0,Math.max(0,view.duration-state.waveSpan));
+  }
+  requestWaveDetail();
+}
+
+function bindShortcutSettings() {
+  const defaults=defaultShortcuts(),saved=readJson('subtitleStudio.shortcuts.v1');
+  state.shortcuts={...defaults};
+  for(const key of Object.keys(defaults)){
+    if(typeof saved[key]==='string'&&saved[key])state.shortcuts[key]=saved[key];
+  }
+  if(!['none','alt','ctrl','shift'].includes(state.shortcuts.waveZoom))state.shortcuts.waveZoom=defaults.waveZoom;
+  if(!['none','alt','ctrl','shift'].includes(state.shortcuts.wavePan)||state.shortcuts.wavePan===state.shortcuts.waveZoom){
+    state.shortcuts.waveZoom=defaults.waveZoom;state.shortcuts.wavePan=defaults.wavePan;
+  }
+  const dialog=$('#shortcutDialog');
+  const populate=values=>{
+    dialog.querySelectorAll('[data-shortcut]').forEach(input=>{input.value=values[input.dataset.shortcut];});
+    $('#shortcutWaveZoom').value=values.waveZoom;$('#shortcutWavePan').value=values.wavePan;
+    $('#shortcutError').textContent='';
+  };
+  const updateHints=()=>{
+    const modifier=value=>value==='none'?'':value==='alt'?'Alt＋':value==='ctrl'?'Ctrl＋':'Shift＋';
+    const hint=modifier(state.shortcuts.waveZoom)+'滚轮缩放，'+modifier(state.shortcuts.wavePan)+'滚轮左右移动音频条';
+    waveCanvas.setAttribute('aria-label','声音时间轴，'+hint+'，拖动字幕边缘校时');
+    waveCanvas.dataset.tip=hint;
+    $('#btnSave').dataset.tip='保存工程（'+state.shortcuts.save+'）';
+    $('.help-keys').textContent='快捷键：播放／暂停 '+state.shortcuts.play+' · 保存 '+state.shortcuts.save+' · 撤销 '+state.shortcuts.undo+' · 重做 '+state.shortcuts.redo+' · 搜索 '+state.shortcuts.search+'；'+hint+'。可在上边栏“设置”修改。';
+  };
+  updateHints();
+  $('#btnShortcutSettings').addEventListener('click',()=>{populate(state.shortcuts);dialog.showModal();});
+  dialog.querySelectorAll('[data-shortcut]').forEach(input=>input.addEventListener('keydown',event=>{
+    if(['Tab','Escape'].includes(event.key))return;
+    event.preventDefault();event.stopPropagation();
+    const key=shortcutKey(event);if(key)input.value=key;
+  }));
+  $('#btnResetShortcuts').addEventListener('click',()=>populate(defaults));
+  $('#btnCancelShortcuts').addEventListener('click',()=>dialog.close());
+  $('#btnSaveShortcuts').addEventListener('click',()=>{
+    const next={};dialog.querySelectorAll('[data-shortcut]').forEach(input=>{next[input.dataset.shortcut]=input.value;});
+    const keys=Object.values(next);
+    if(keys.some(key=>!key)||new Set(keys).size!==keys.length){$('#shortcutError').textContent='快捷键不能为空或重复，请重新设置。';return;}
+    next.waveZoom=$('#shortcutWaveZoom').value;next.wavePan=$('#shortcutWavePan').value;
+    if(next.waveZoom===next.wavePan){$('#shortcutError').textContent='缩放与左右移动请使用不同的滚轮组合。';return;}
+    state.shortcuts=next;writeJson('subtitleStudio.shortcuts.v1',next);updateHints();dialog.close();toast('快捷键设置已保存','success');
+  });
+}
+
 function handlePlaybackShortcut(event) {
-  if(event.code!=='Space'&&event.key!==' ')return;
-  if(event.isComposing||event.ctrlKey||event.metaKey||event.altKey)return;
+  if(event.defaultPrevented||!matchesShortcut(event,'play')||document.querySelector('dialog[open]'))return;
+  if(event.isComposing)return;
   const target=event.target;
   const type=String(target?.type||'').toLowerCase();
   const editing=target?.isContentEditable||['TEXTAREA'].includes(target?.tagName)
@@ -3650,12 +3948,18 @@ function handlePlaybackShortcut(event) {
   if(editing)return;
   event.preventDefault();event.stopImmediatePropagation();
   if(event.repeat)return;
-  const player=state.settings.mode==='remove'?$('#removalVideo'):video;
+  const player=video;
   if(!player)return;
   if(player.paused)player.play().catch(()=>{});else player.pause();
 }
 
 function bindEvents() {
+  bindShortcutSettings();
+  $('#timingAdvanced').addEventListener('toggle',()=>{
+    if(!$('#timingAdvanced').open&&state.timingPreview){
+      state.timingPreview=false;updateButtons();updateOverlay();drawWave();
+    }
+  });
   document.addEventListener('keydown',handlePlaybackShortcut,true);
   $('#btnPreviewTiming').addEventListener('click',()=>{
     if(editLocked())return;
@@ -3678,7 +3982,10 @@ function bindEvents() {
   $('#waveGain').addEventListener('input',e=>{state.settings.waveGain=Number(e.target.value);$('#waveGainValue').textContent=e.target.value+'×';drawWave();});
   $('#waveGain').addEventListener('change',()=>{collectSettings();scheduleConfigSave();});
   $('#btnOpenProject').addEventListener('click',showProjectLibrary);
-  $('#projectList').addEventListener('click',e=>{const button=e.target.closest('[data-project]');if(!button||button.disabled)return;const p=state.recentProjects[Number(button.dataset.project)];if(p){$('#projectDialog').close();openSavedProject(p.source_path);}});
+  $('#projectList').addEventListener('click',e=>{const button=e.target.closest('[data-project]');if(!button||button.disabled)return;const p=state.recentProjects[Number(button.dataset.project)];if(p){$('#projectDialog').close();openSavedProject(p.source_path,p.available);}});
+  $('#btnRelinkMedia').addEventListener('click',()=>pickMedia(true));
+  $('#btnDrafts').addEventListener('click',()=>showLocalDrafts(true));
+  $('#draftList').addEventListener('click',event=>{const item=event.target.closest('[data-draft]');if(item)recoverProjectDraft(state.localDrafts[Number(item.dataset.draft)]?.key).catch(error=>toast(error.message,'error'));});
   $('#btnOpenProjectFolder').addEventListener('click', async () => {
     // 使用后端返回的工程存储目录，避免误打开素材文件夹。
     const target=state.projectDirectory||'';
@@ -3698,8 +4005,7 @@ function bindEvents() {
       setMode(buttons[next].dataset.mode); buttons[next].focus(); playSound("key");
     });
   });
-  $("#btnSave").addEventListener("click",()=>state.settings.mode==='remove'
-    ? window.SubtitleRemoval?.save(true).then(ok=>ok&&toast('消除设置已保存','success')) : saveAll());
+  $("#btnSave").addEventListener("click", saveAll);
   $("#btnSourceSrt").addEventListener("click", () => state.settings.mode === 'align' ? importSrt() : exportSrt(false));
   $("#btnHelp").addEventListener("click", () => {
     const version = $("#helpVersion");
@@ -3732,8 +4038,9 @@ function bindEvents() {
     if (await saveProject(false)) { playSound("success"); toast("已采用识别结果，可撤销", "success"); }
   });
   $("#btnRealignAll").addEventListener("click",alignAndVerify);
+  $('#btnRecommendedSettings').addEventListener('click',applyRecommendedSettings);
   $("#btnCalibrate").addEventListener("click", () => calibrateAll());
-  $("#btnVerifyAgain")?.addEventListener("click", () => verifyOnly());
+  $('#btnVerify').addEventListener('click',verifyOnly);
   $("#waveZoomIn").addEventListener("click", () => {
     const view = waveWindow(); if (!view.duration) return;
     state.waveSpan = Math.max(.5, view.span / 2); state.waveStart = Math.max(0, (video.currentTime || 0) - state.waveSpan / 2); requestWaveDetail();
@@ -3746,6 +4053,8 @@ function bindEvents() {
   $("#btnSegment").addEventListener("click", doSegment);
   $("#btnMerge").addEventListener("click", doMerge);
   $("#btnAddCue").addEventListener("click", addCue);
+  $('#btnCancelAddCue').addEventListener('click',()=>$('#addCueDialog').close());
+  $('#addCueText').addEventListener('input',e=>e.target.setCustomValidity(e.target.value.trim()?'':'字幕内容不能为空'));
   $("#btnDelete").addEventListener("click", deleteCue);
   $("#btnUndo").addEventListener("click", undo);
   $('#btnReset').addEventListener('click',resetCues);
@@ -3870,7 +4179,7 @@ function bindEvents() {
 
   cueBody.addEventListener("focusin", (e) => {
     if (editLocked()) return;
-    if (e.target.matches(".cue-text, input.time")) {
+    if (e.target.matches(".cue-text, .cue-reference, input.time")) {
       state.editBefore = snapshot();
       const tr = e.target.closest("tr[data-i]");
       if (tr && !state.additiveFocus) selectCue(Number(tr.dataset.i), false);
@@ -3879,25 +4188,22 @@ function bindEvents() {
 
   cueBody.addEventListener("input", (e) => {
     if (editLocked()) return;
+    if (e.target.classList.contains('cue-reference')) {
+      const row=e.target.closest('tr[data-i]'),cue=row&&state.cues[Number(row.dataset.i)];
+      if(cue){editCueReference(cue,e.target.innerText);scheduleSave();}
+      return;
+    }
     if (!e.target.classList.contains("cue-text")) return;
     const tr = e.target.closest("tr[data-i]");
     if (!tr) return;
     const cue = state.cues[Number(tr.dataset.i)];
     if (!cue) return;
-    const manualExcluded = cue.review_decision === 'non_script';
     const edited=mergeEditedCueText(cue.text,e.target.innerText.replace(/ /g, " "));
     if(edited===cue.text)return;
+    const manualExcluded = cue.review_decision === 'non_script' && !!cue.exclude_export;
     cue.text = edited;
-    delete cue.merge_suggestion;
     delete cue.interjection;
-    if(cue.interjection_excluded){
-      delete cue.interjection_excluded;
-      if(!manualExcluded)cue.exclude_export=false;
-    }
-    if(cue.verification_excluded){
-      delete cue.verification_excluded;
-      if(!manualExcluded)cue.exclude_export=false;
-    }
+    releaseVerificationExclusions([cue]);
     completeModification(cue);
     cue.review_decision = manualExcluded ? 'non_script' : 'manual';
     // 用户亲手改过文字，说明不是幻觉原句：解除自动排除，但保留手动的“不导出”。
@@ -3911,9 +4217,11 @@ function bindEvents() {
     }
     if (cue.reference_match) cue.reference_match.stale = true;
     cue.words = [];
+    if(cue.alignment)cue.alignment.stale=true;
     const badges=tr.querySelector('.badges');if(badges)badges.innerHTML=badgesHtml(cue);
     const review=tr.querySelector('.cue-review');if(review)review.innerHTML=cueReviewHtml(cue,Number(tr.dataset.i));
-    e.target.classList.remove('low','noise','context-warning');
+    e.target.classList.remove('low','noise','context-warning','minor-warning','passed');
+    if(cueTextClass(cue))e.target.classList.add(cueTextClass(cue));
     tr.classList.toggle('excluded', cueExcluded(cue));
     updateOverlay();
     scheduleSave();
@@ -3947,20 +4255,18 @@ function bindEvents() {
     if((previous&&cue.start<previous.end)||(next&&cue.end>next.start)||(state.media?.duration&&cue.end>state.media.duration)){
       cue[field]=old;e.target.value=fmtCueTime(old);toast('时间不能与前后字幕重叠或超出视频','error');return;
     }
-    delete cue.merge_suggestion;
-    // 与改字一致：手工修正时间后不再沿用此前的自动变灰，手动“不导出”仍保留。
-    if(cue.verification_excluded){
-      delete cue.verification_excluded;
-      if(cue.review_decision!=='non_script')cue.exclude_export=false;
-    }
-    completeModification(cue);cue.words=[];
-    if(cue.alignment)cue.alignment.stale=true;
+    // 与改字一致：手工修正时间后不再沿用此前的自动排除，手动“不导出”仍保留。
+    releaseVerificationExclusions([cue]);
+    if(value!==old)confirmCueTiming(cue);
     const badges=tr.querySelector('.badges');if(badges)badges.innerHTML=badgesHtml(cue);
     const review=tr.querySelector('.cue-review');if(review)review.innerHTML=cueReviewHtml(cue,Number(tr.dataset.i));
-    tr.querySelector('.cue-text')?.classList.remove('low','noise','context-warning');
+    const textCell=tr.querySelector('.cue-text');
+    textCell?.classList.remove('low','noise','context-warning','minor-warning','passed');
+    if(textCell&&cueTextClass(cue))textCell.classList.add(cueTextClass(cue));
     tr.classList.toggle('excluded',cueExcluded(cue));
     pushHistory(state.editBefore);
     state.editBefore = snapshot();
+    updateCueCount();
     scheduleSave();
     updateOverlay();
     drawWave();
@@ -3968,26 +4274,41 @@ function bindEvents() {
 
   cueBody.addEventListener("focusout", (e) => {
     if (editLocked()) { state.editBefore = null; return; }
-    if (!e.target.matches(".cue-text, input.time")) return;
+    if (!e.target.matches(".cue-text, .cue-reference, input.time")) return;
+    if(e.target.matches('.cue-reference')){
+      const row=e.target.closest('tr[data-i]'),cue=row&&state.cues[Number(row.dataset.i)];
+      if(cue)e.target.textContent=subtitleText(cue.manual_reference ?? cue.script_text ?? '');
+    }
     if(e.target.matches('.cue-text')){
       const row=e.target.closest('tr[data-i]'),cue=row&&state.cues[Number(row.dataset.i)];
+      if(cue&&!String(cue.text||'').trim()){
+        const before=state.editBefore||snapshot();
+        replaceCues(state.cues.filter(item=>item!==cue),{before});
+        toast('已移除空白字幕，可撤销','info');return;
+      }
       if(cue)e.target.textContent=editableCueText(cue.text);
     }
     const changed = !!state.editBefore && snapshot() !== state.editBefore;
     if (changed) {
       state.history.push(state.editBefore);
-      if (state.history.length > HISTORY_LIMIT) state.history.shift();
+      trimHistory(state.history);
       state.redoStack = [];
     }
     state.editBefore = null;
+    const row=e.target.closest('tr[data-i]');
+    if(row && (state.filter!=='all'||state.search.trim()) && !row.contains(e.relatedTarget)){
+      // 离开编辑行才更新可见性；同一行的“采用此句”等按钮仍能收到点击。
+      row.hidden=!filteredRows().some(item=>item.i===Number(row.dataset.i));
+      updateCueCount();
+    }
     // 文本和时间编辑已在 input/change 中安排保存；只点进点出不应写工程文件。
-    if (changed) scheduleSave();
+    if (changed) { scheduleSave(); updateCueCount(); drawWave(); }
     renderScript();
     updateButtons();
   });
 
   cueBody.addEventListener("keydown", (e) => {
-    if (e.target.classList.contains("cue-text")) {
+    if (e.target.matches('.cue-text, .cue-reference')) {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         e.target.blur();
@@ -4006,13 +4327,18 @@ function bindEvents() {
   cueBody.addEventListener("click", async (e) => {
     const row = e.target.closest('.script-line[data-i]');
     if (!row) return;
-    const i = Number(row.dataset.i), cue = state.cues[i], action = e.target.closest('[data-review]')?.dataset.review;
+    const cue = state.cues[Number(row.dataset.i)], action = e.target.closest('[data-review]')?.dataset.review;
     if (action && editLocked()) return;
-    if (action === 'exclude') markReview(i, cueExcluded(cue) ? 'included' : 'non_script');
-    else if (action === 'retranscribe') await startAsr('region',{index:i,start:cue.start,end:cue.end});
-    else if (action === 'rematch') await matchScript(false, [i]);
-    else if (['kept','non_script','skipped'].includes(action)) markReview(i, action);
-    else if (action === 'edit') { selectCue(i, false); const cell = $(`#cueBody tr[data-i="${i}"] .cue-text`); cell?.scrollIntoView({block:'center'}); cell?.focus(); }
+    if(action==='use-reference'){
+      const before=snapshot();
+      if(useCueReference(cue)){pushHistory(before);renderAll();updateOverlay();scheduleSave();}
+    }
+    else if(action==='approve'){
+      const before=snapshot();completeModification(cue);cue.review_decision='manual';
+      if(cue.hallucination)cue.hallucination={...cue.hallucination,dismissed:true};
+      releaseVerificationExclusions([cue]);
+      pushHistory(before);renderAll();scheduleSave();
+    }
     else if (action === 'confirm') { const before = snapshot(); cue.reference_match.candidate_confirmed = true; pushHistory(before); renderScript(); scheduleSave(); }
     else if (action === 'candidate') {
       const candidate = cue.reference_match.alternatives[Number(e.target.closest('[data-candidate]').dataset.candidate)];
@@ -4053,22 +4379,22 @@ function bindEvents() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden" && state.dirty) {
       clearTimeout(state.saveTimer);
-      saveProject(true, { keepalive: true });
+      cacheProjectDraft();
+      saveProject(true);
     }
   });
 
   document.addEventListener("keydown", (e) => {
     const tag = (e.target.tagName || "").toLowerCase();
     const editing = e.target.isContentEditable || tag === "input" || tag === "select" || tag === "textarea";
-    if (e.defaultPrevented || e.isComposing) return;
-    if(state.settings.mode==='remove'){window.SubtitleRemoval?.handleKey(e);return;}
-    if (e.ctrlKey && e.key.toLowerCase() === "s") {
+    if (e.defaultPrevented || e.isComposing || document.querySelector('dialog[open]')) return;
+    if (matchesShortcut(e,'save')) {
       e.preventDefault();
       saveAll();
       return;
     }
     /* 和浏览器查找一致：Ctrl+F 聚焦搜索框并全选当前关键词。 */
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+    if (matchesShortcut(e,'search')) {
       e.preventDefault();
       const input = $("#searchInput");
       searchCursor = -1;
@@ -4077,14 +4403,10 @@ function bindEvents() {
       return;
     }
     if (editing) return;
-    if (e.code === "Space") {
-      if (e.target.closest?.('button,a[href],summary,[role="button"],[role="checkbox"],[role="slider"],video,dialog')) return;
-      e.preventDefault();
-      if (video.paused) video.play().catch(() => {}); else video.pause();
-    } else if (e.ctrlKey && e.key.toLowerCase() === "z") {
+    if (matchesShortcut(e,'undo')) {
       e.preventDefault();
       undo();
-    } else if (e.ctrlKey && e.key.toLowerCase() === "y") {
+    } else if (matchesShortcut(e,'redo')) {
       e.preventDefault();
       redo();
     }
@@ -4120,6 +4442,7 @@ async function init() {
   applyLayout();
   revealApp();
   await checkHealth();
+  showLocalDrafts();
   pollModelDownload();
 }
 

@@ -16,7 +16,7 @@ def manifest():
         value = json.loads((ROOT_DIR / 'runtime/manifest.json').read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return {}
-    return value if isinstance(value, dict) and value.get('format') == 1 and value.get('ready') is True else {}
+    return value if isinstance(value, dict) and value.get('format') in (1, 2) and value.get('ready') is True else {}
 
 
 def stale_venv_home(location):
@@ -53,11 +53,6 @@ def gpu_python():
     return python if value.get('torch') == 'cuda' and python.is_file() else None
 
 
-def propainter_source():
-    source = ROOT_DIR / 'runtime/vendor/propainter'
-    return source if python_for('removal') and (source / 'inference_propainter.py').is_file() else None
-
-
 def cuda_available():
     if manifest().get('torch_flavor') != 'cuda' and not gpu_python():
         return False
@@ -73,7 +68,7 @@ def cuda_available():
 def configure_cuda_libraries():
     if os.name != 'nt':
         return
-    python = python_for('removal')
+    python = python_for('firered') or python_for('qwen')
     if python is None:
         return
     directory = python.parent / 'Lib/site-packages/torch/lib'

@@ -46,7 +46,7 @@ def bundled_python():
     try:
         result = subprocess.run(
             [str(RUNTIME), '-I', '-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
         )
     except OSError:
         return None
@@ -56,7 +56,7 @@ def bundled_python():
 def check_pip():
     """使用带 pip 的项目虚拟环境，开发环境与便携环境都可准备 wheel。"""
     result = subprocess.run([sys.executable, '-m', 'pip', '--version'],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, encoding='utf-8', errors='replace')
     if result.returncode != 0:
         raise SystemExit('pip is not available in this Python. '
                          'Run py main.py setup, then use the project Python to prepare wheels.')

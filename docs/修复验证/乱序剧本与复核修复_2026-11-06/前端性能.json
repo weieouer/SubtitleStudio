@@ -1,9 +1,0 @@
-{
-  "cues": 5000,
-  "script_characters": 400000,
-  "snapshot_ms": 6,
-  "render_ms": 879.2999999970198,
-  "payload_json_ms": 9.600000008940697,
-  "payload_bytes": 4170222,
-  "timing_setting_ms": 174.1000000089407
-}

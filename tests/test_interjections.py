@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 from core.interjections import (
-    drop_interjections, is_interjection, mark_interjections,
+    is_interjection, mark_interjections,
     strip_boundary_interjections, strip_interjection_cues,
 )
 
@@ -73,12 +73,6 @@ class InterjectionTests(unittest.TestCase):
         self.assertEqual((removed, trimmed), (2, 1))
         self.assertTrue(kept[1]['edited'])
         self.assertFalse(kept[1]['modification_complete'])
-
-    def test_drop_returns_kept_cues_and_summaries(self):
-        cues = [cue('哈哈哈', 1), cue('你呀，快点', 2), cue('唉', 3)]
-        kept, dropped = drop_interjections(cues)
-        self.assertEqual([item['id'] for item in kept], [2])
-        self.assertEqual(dropped, [{'id': 1, 'text': '哈哈哈'}, {'id': 3, 'text': '唉'}])
 
     def test_mark_keeps_all_cues_and_flags_whole_interjections(self):
         cues = [cue('哈哈哈', 1), cue('你呀，快点', 2), cue('唉', 3)]

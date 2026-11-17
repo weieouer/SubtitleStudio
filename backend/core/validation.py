@@ -38,7 +38,7 @@ def cues(value, *, repair_word_times=False) -> list[dict]:
             raise ValueError(f"第{i}条结束时间必须晚于开始时间")
         if not isinstance(cue.get("text"), str):
             raise ValueError(f"第{i}条text必须是字符串")
-        for field in ("role", "script_text", "source"):
+        for field in ("role", "script_text", "source", "manual_reference"):
             if field in cue and not isinstance(cue[field], str):
                 raise ValueError(f"第{i}条{field}必须是字符串")
         for field in ("confidence", "match_ratio", "no_speech_prob"):

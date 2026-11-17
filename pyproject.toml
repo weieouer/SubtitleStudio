@@ -1,4 +1,4 @@
-# 本项目以源码维护、默认在线 EXE 发布，运行依赖由 requirements*.txt 管理。
+# 本项目以源码维护、默认完整 EXE 发布，运行依赖由 requirements*.txt 管理。
 # 此文件仅统一源码工具设置，不声明需要安装到系统的 Python 发行包。
 [tool.ruff]
 target-version = "py313"

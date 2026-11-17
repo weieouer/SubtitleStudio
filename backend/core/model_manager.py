@@ -17,7 +17,7 @@ import venv
 
 from .paths import CONFIG_DIR, DATA_DIR, MODELS_DIR, ROOT_DIR
 from .progress_console import spawn as spawn_progress_console
-from .storage import atomic_json
+from .storage import atomic_json, locked_file
 from .model_sources import resolve_sources
 
 CATALOG = {
@@ -51,6 +51,8 @@ DEFAULT_INDEXES = ('https://mirrors.aliyun.com/pypi/simple',
                    'https://mirrors.cloud.tencent.com/pypi/simple',
                    'https://pypi.org/simple')
 ENGINE_CONFIG_FILE = CONFIG_DIR / "engines.json"
+FIRERED_CONFIG_FILE = CONFIG_DIR / 'firered.json'
+FIRERED_FALLBACK_REVISION = '4e7d9aaf4482a47cec1724807026b9b151926eb5'
 PIP_CACHE_DIR = DATA_DIR / "cache" / "pip"
 _CONFIG_CACHE: dict = {"key": object(), "data": None}
 
@@ -74,7 +76,12 @@ def engine_config():
         mtime = ENGINE_CONFIG_FILE.stat().st_mtime_ns
     except OSError:
         mtime = None
-    key = (str(ENGINE_CONFIG_FILE), mtime)
+    try:
+        firered_text = FIRERED_CONFIG_FILE.read_text(encoding='utf-8')
+    except (OSError,UnicodeError):
+        firered_text = ''
+    # 固定版本文件很小，按内容失效，避免 Windows 快速写入时复用同一时间戳。
+    key = (str(ENGINE_CONFIG_FILE), mtime, str(FIRERED_CONFIG_FILE), firered_text)
     cached = _CONFIG_CACHE
     if cached["data"] is not None and cached["key"] == key:
         return cached["data"]
@@ -83,6 +90,7 @@ def engine_config():
     if mtime is not None:
         try:
             raw = json.loads(ENGINE_CONFIG_FILE.read_text(encoding="utf-8"))
+            if not isinstance(raw,dict):raise ValueError('引擎配置必须是对象')
             if _valid_indexes(raw.get("indexes")):
                 data["indexes"] = list(raw["indexes"])
             if isinstance(raw.get("pip_cache"), str) and raw["pip_cache"].strip():
@@ -95,7 +103,8 @@ def engine_config():
                     data["torch"]["cuda_index"] = torch["cuda_index"].strip()
                 if _valid_packages(torch.get("packages")):
                     data["torch"]["packages"] = torch["packages"]
-            for name, spec in (raw.get("engines") or {}).items():
+            configured_engines = raw.get('engines')
+            for name, spec in (configured_engines if isinstance(configured_engines,dict) else {}).items():
                 if name not in DEFAULT_ENGINES or not isinstance(spec, dict):
                     continue
                 merged = dict(data["engines"][name])
@@ -110,6 +119,17 @@ def engine_config():
                 data["engines"][name] = merged
         except (OSError, ValueError, TypeError):
             pass
+    # 与完整安装包使用同一提交，防止在线准备时悄悄安装 main 分支的新代码。
+    revision = FIRERED_FALLBACK_REVISION
+    try:
+        pinned = json.loads(firered_text).get('revision')
+        if isinstance(pinned,str) and re.fullmatch(r'[0-9a-f]{40}',pinned):revision=pinned
+    except (OSError,ValueError,AttributeError):
+        pass
+    data['engines']['firered']['packages'] = [
+        f'https://github.com/FireRedTeam/FireRedASR2S/archive/{revision}.zip'
+        if package == DEFAULT_ENGINES['firered']['packages'][0] else package
+        for package in data['engines']['firered']['packages']]
     _CONFIG_CACHE.update(key=key, data=data)
     return data
 
@@ -261,7 +281,7 @@ def nvidia_gpu_present():
     if executable:
         try:
             result = subprocess.run([executable, "--query-gpu=name", "--format=csv,noheader"],
-                                    capture_output=True, text=True, timeout=8,
+                                    capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=8,
                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             present = result.returncode == 0 and bool(result.stdout.strip())
         except (OSError, subprocess.SubprocessError):
@@ -321,10 +341,12 @@ def runtime_ready(engine):
         return False
     if not (runtime_python(engine).is_file() and (location / "ready.json").is_file()):
         return False
+    marker = ready_marker(engine)
+    if marker.get('engine') != engine:
+        return False
     # 要求 CUDA 版 PyTorch 时，旧的 CPU 环境视为未就绪，下次下载会重装 torch。
     # 但已经尝试过 GPU 并回退 CPU 的环境必须算就绪，否则每次启动都会重下 2.9 GB。
     if engine_config()["engines"].get(engine, {}).get("torch") and desired_torch() == "cuda":
-        marker = ready_marker(engine)
         return marker.get("torch") == "cuda" or bool(marker.get("gpu_error"))
     return True
 
@@ -569,6 +591,12 @@ class ModelDownloads:
         directory = model_directory(name)
         target = directory.joinpath(*PurePosixPath(item["name"]).parts)
         target.parent.mkdir(parents=True, exist_ok=True)
+        sources = item.get('urls') or [{'url':f"https://hf-mirror.com/{ALL_MODELS[name]['repo']}/resolve/{revision}/{quote(item['name'], safe='/')}", 'label':'HF 国内镜像'}]
+        # 两个后端可能同时下载同一文件；锁内重新检查完整文件和断点，避免互相截断。
+        with locked_file(target.with_name(target.name + '.download.lock'), timeout=1800, cancelled=self.check):
+            self._download_locked(name, item, target, completed, total, sources)
+
+    def _download_locked(self, name, item, target, completed, total, sources):
         expected = item["size"]
         if target.exists() and target.stat().st_size == expected:
             if not item.get('sha256') or self._sha256(target) == item['sha256']:
@@ -583,7 +611,6 @@ class ModelDownloads:
             partial.unlink(missing_ok=True)
         elif expected and offset > expected:
             partial.unlink(missing_ok=True)
-        sources = item.get('urls') or [{'url':f"https://hf-mirror.com/{ALL_MODELS[name]['repo']}/resolve/{revision}/{quote(item['name'], safe='/')}", 'label':'HF 国内镜像'}]
         for attempt in range(3):
             self.check()
             try:
@@ -665,7 +692,7 @@ class ModelDownloads:
         code = "import torch; print('cuda' if torch.cuda.is_available() else 'cpu')"
         try:
             result = subprocess.run([str(runtime_python(engine)), '-c', code],
-                                    capture_output=True, text=True, timeout=90, env=environment,
+                                    capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=90, env=environment,
                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         except (OSError, subprocess.SubprocessError):
             return None
@@ -682,7 +709,7 @@ class ModelDownloads:
         """在目标环境里 import 引擎入口；失败时把输出留在安装日志里。"""
         try:
             probe = subprocess.run([str(runtime_python(engine)), '-c', engine_spec(engine)["probe"]],
-                                   capture_output=True, text=True, timeout=90, env=environment,
+                                   capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=90, env=environment,
                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         except (OSError, subprocess.SubprocessError) as error:
             if output is not None:
@@ -863,7 +890,7 @@ class ModelDownloads:
             self.check()
             probe = subprocess.run([str(python), '-c',
                 'import torch,torchvision,torchaudio; from qwen_asr import Qwen3ForcedAligner; print(int(torch.cuda.is_available()))'],
-                env=environment, capture_output=True, text=True, timeout=120,
+                env=environment, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             if probe.returncode:
                 raise RuntimeError('GPU 环境自检失败，CPU 环境保留：' + probe.stderr[-1200:])

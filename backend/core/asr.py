@@ -178,20 +178,22 @@ def transcribe(path: str, model_name: str = "medium", device: str = "auto",
                     "word": w.word,
                     "probability": round(float(w.probability), 3) if getattr(w, "probability", None) is not None else None,
                 })
-            avg_logprob = float(getattr(seg, "avg_logprob", 0) or 0)
+            raw_logprob = getattr(seg, "avg_logprob", None)
+            avg_logprob = float(raw_logprob) if raw_logprob is not None else None
             no_speech = float(getattr(seg, "no_speech_prob", 0) or 0)
-            confidence = max(0.0, min(1.0, math.exp(avg_logprob)))
+            confidence = math.exp(min(0.,avg_logprob)) if avg_logprob is not None and math.isfinite(avg_logprob) else None
             cues.append({
                 "id": len(cues) + 1,
                 "start": round(float(seg.start), 3),
                 "end": round(float(seg.end), 3),
                 "text": text,
                 "words": words,
-                "confidence": round(confidence, 3),
-                "avg_logprob": round(avg_logprob, 3),
+                "confidence": round(confidence, 3) if confidence is not None else None,
+                "avg_logprob": round(avg_logprob, 3) if avg_logprob is not None and math.isfinite(avg_logprob) else None,
                 "no_speech_prob": round(no_speech, 3),
                 "is_noise": no_speech > 0.6,
-                "needs_review": confidence < 0.45 or no_speech > 0.5,
+                # 原识别评分只是模型原始分数，不作为文字正确率；复核只看非人声概率。
+                "needs_review": no_speech > 0.5,
                 "edited": False,
                 "estimated": False,
                 "source": "asr",

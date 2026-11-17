@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import math
 import unicodedata
+from bisect import bisect_right
 
 try:
     import jieba  # type: ignore
@@ -297,8 +298,9 @@ def segment_cue(cue: dict, max_width: float = 20.0, *, split_at=None) -> tuple[l
         if pause_before:piece['pause_before']=piece['start']
         if pause_after:piece['pause_after']=piece['end']
         out.append(piece)
-    if cue.get('reference_match'):
-        from .reference_match import inherit_reference
+    if cue.get('reference_match') or 'manual_reference' in cue:
+        from .reference_match import inherit_reference, inherit_manual_reference
+        inherit_manual_reference(cue,out)
         inherit_reference(cue,out)
     return out, len(out) - 1
 
@@ -362,39 +364,43 @@ def segment_alignment_cues(cues: list[dict], max_width: float = 20.0) -> tuple[l
     return result, splits
 
 
-_SENTENCE_BREAK = re.compile(r"[。！？!?；;]+|(?<![.\d])\.(?![.\d])|\n+")
-
-
-def _reference_break_at(cue: dict, cut: int) -> bool | None:
-    """参考在该切点是否断句；同一句话返回 None，交给声音停顿判断。
-
-    参考里两句话之间的句末标点/换行是明确句界，不受停顿阈值影响；
-    同一句话内部是否拆条，由词间停顿决定。
-    """
+def _reference_break_context(cue: dict):
+    """一条字幕只计算一次原文句界及文字映射，供全部词边界共用。"""
     match = cue.get('reference_match') or {}
     reference = match.get('reference') or {}
     raw = reference.get('text')
     text = cue.get('text') or ''
-    if (not raw or reference.get('reference_only')
+    from .reference_match import _reference_boundaries, normalized, sentence_ranges
+    query, positions = normalized(text)
+    manual = cue.get('manual_reference')
+    manual_matches = (isinstance(manual,str) and bool(manual)
+                      and not cue.get('manual_reference_needs_review')
+                      and normalized(manual)[0] == query)
+    if manual_matches:
+        raw = manual
+    elif (not raw or reference.get('reference_only')
             or match.get('status') in ('unmatched', 'context_mismatch')
             or (match.get('status') == 'ambiguous' and not match.get('candidate_confirmed'))):
         return None
-    from .reference_match import _reference_boundaries, normalized
-    query, positions = normalized(text)
     target, target_positions = normalized(raw)
     if not query or not target:
         return None
     # 采用参考后 match 会标记过期；只要文字仍与参考逐字一致，句界仍然可信。
-    if match.get('stale') and query != target:
+    if not manual_matches and match.get('stale') and query != target:
         return None
-    boundary = sum(1 for start, end in positions if end <= cut)
-    if boundary <= 0 or boundary >= len(query):
-        return None
-    mapped = _reference_boundaries(query, target, [boundary])[0]
-    if mapped <= 0 or mapped >= len(target):
-        return None
-    between = raw[target_positions[mapped - 1][1]:target_positions[mapped][0]]
-    return True if _SENTENCE_BREAK.search(between) else None
+    # 句读设置只控制显示；参考中逗号、冒号、省略号等也必须参与拆句。
+    sentence_starts = {a for a,b in sentence_ranges(raw) if a}
+    boundaries = range(1,len(query))
+    mapped = _reference_boundaries(query,target,list(boundaries))
+    breaks = {boundary for boundary,hit in zip(boundaries,mapped)
+              if 0 < hit < len(target) and target_positions[hit][0] in sentence_starts}
+    return [end for start,end in positions], breaks
+
+
+def _reference_break_at(cue: dict, cut: int) -> bool | None:
+    """参考明确句界才强制拆句；其余切点交给可靠声音停顿判断。"""
+    context = _reference_break_context(cue)
+    return True if context and bisect_right(context[0],cut) in context[1] else None
 
 
 def _gap_has_audio_support(cue: dict, prev: dict, word: dict, min_gap: float) -> bool:
@@ -442,6 +448,7 @@ def split_on_gaps(cues: list[dict], min_gap: float = 0.6, max_width: float=20) -
                         if min_gap > 0 and s['end']-s['start']+1e-6 >= min_gap]
         boundaries = {}
         forced = set()
+        reference_context = _reference_break_context(cue) if positions is not None else None
         for wi, (prev, word) in enumerate(zip(words, words[1:]), 1):
             # 模型可能给逐字时间；词间低能量或真实停顿也不能把“中毒”拆开。
             if lexical_cuts is not None and positions[wi][0][0] not in lexical_cuts:
@@ -460,7 +467,7 @@ def split_on_gaps(cues: list[dict], min_gap: float = 0.6, max_width: float=20) -
                     found = (min(float(prev['end']), silence['start']+.01), float(word['start']))
             # 参考里明确是两句话：即使停顿没到阈值也按句界切开；
             # 参考里是同一句：只在停顿达到阈值时拆，否则保留为一条。
-            ref_break = _reference_break_at(cue, positions[wi][0][0]) if positions is not None else None
+            ref_break = bool(reference_context and bisect_right(reference_context[0],positions[wi][0][0]) in reference_context[1])
             if ref_break is True:
                 forced.add(wi)
                 if found is None:
@@ -565,8 +572,9 @@ def split_on_gaps(cues: list[dict], min_gap: float = 0.6, max_width: float=20) -
         if not valid:
             out.append(cue)
         else:
-            if cue.get('reference_match'):
-                from .reference_match import inherit_reference
+            if cue.get('reference_match') or 'manual_reference' in cue:
+                from .reference_match import inherit_reference, inherit_manual_reference
+                inherit_manual_reference(cue,pieces)
                 inherit_reference(cue,pieces)
             out.extend(pieces)
             splits += len(pieces) - 1
@@ -656,6 +664,9 @@ def merge_cues(cues: list[dict], max_width: float = 20.0, max_duration: float = 
                 starts = [float(s["start"]) for s in sources if isinstance(s.get("start"), (int, float))]
                 ends = [float(s["end"]) for s in sources if isinstance(s.get("end"), (int, float))]
                 original_text = "".join(str(s.get("text") or "") for s in sources)
+                if 'manual_reference' in prev or 'manual_reference' in cue:
+                    prev['manual_reference'] = prev.get('manual_reference',prev.get('script_text','')) + cue.get('manual_reference',cue.get('script_text',''))
+                    prev['manual_reference_needs_review'] = bool(prev.get('manual_reference_needs_review') or cue.get('manual_reference_needs_review'))
                 prev["words"] = left_words + right_words if left_words and right_words else []
                 prev["text"] = new_text
                 prev["end"] = cue.get("end", prev.get("end"))

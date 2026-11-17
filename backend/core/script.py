@@ -1,4 +1,4 @@
-"""剧本解析、与 ASR 结果模糊匹配。"""
+"""读取 TXT/MD/DOCX 原文；参考解析和匹配统一由 reference_match 处理。"""
 from __future__ import annotations
 
 import zipfile
@@ -26,15 +26,3 @@ def read_script_text(path: str) -> tuple[str, str]:
         raise RuntimeError("暂不支持 .doc，请另存为 .docx 或 .txt")
     from .srt_io import read_text
     return read_text(path)
-
-
-def parse_script_text(text: str) -> list[dict]:
-    """Compatibility API: format-free paragraphs, preserving original positions."""
-    from .reference_match import parse_document
-    return parse_document(text)["paragraphs"]
-
-
-def match_script(cues: list[dict], lines: list[dict]) -> dict:
-    """Compatibility API: delegate to the single full-text matching engine."""
-    from .reference_match import match_reference
-    return match_reference(cues, {"text": "\n".join(line["text"] for line in lines)})

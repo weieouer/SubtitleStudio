@@ -32,10 +32,6 @@ from core import validation  # noqa: E402
 from core.model_manager import (CATALOG, DOWNLOADS, engine_gpu_ready, gpu_status,  # noqa: E402
                                 list_auxiliary, set_model_location)
 from core.storage import WRITE_LOCK, atomic_json, locked_file  # noqa: E402
-from core.removal_models import INSTALLER as REMOVAL_INSTALLER, model_status as removal_model_status
-from core.removal_jobs import REMOVAL_JOBS, validate_request as validate_removal_request, video_info as removal_video_info, project_file as removal_project_file
-from core.removal_jobs import validate_segments as validate_removal_segments
-from core.removal_scan import SCANNER as REMOVAL_SCANNER
 from core.paths import (  # noqa: E402
     CONFIG_DIR, DATA_DIR, FRONTEND_DIR, OUTPUTS_DIR, PROJECTS_DIR, UPLOADS_DIR,
 )
@@ -61,7 +57,7 @@ WEB_DIR = FRONTEND_DIR
 OUTPUT_DIR = OUTPUTS_DIR
 PROJECT_DIR = PROJECTS_DIR
 
-VERSION = "3.1.0"
+VERSION = "3.2.2"
 STARTED_AT = time.time()
 SESSION_TOKEN = secrets.token_urlsafe(32)
 DIALOG_LOCK = threading.Lock()
@@ -220,7 +216,7 @@ def _safe_filename(value: str) -> str:
     return stem + suffix
 
 
-def _output_path(media_path: str, out_dir: str | None, overwrite: bool, extension: str = 'srt') -> Path:
+def _output_base(media_path: str, out_dir: str | None) -> tuple[Path, str]:
     if media_path:
         media_path = os.path.abspath(media_path)
         stem = Path(media_path).stem
@@ -229,12 +225,58 @@ def _output_path(media_path: str, out_dir: str | None, overwrite: bool, extensio
         stem = "字幕_" + time.strftime("%Y%m%d_%H%M%S")
         folder = _clean_path(out_dir) if out_dir else str(OUTPUT_DIR)
     os.makedirs(folder, exist_ok=True)
-    target = Path(folder) / f"{stem}.{extension}"
-    if not overwrite and target.exists():
-        i = 2
-        while (Path(folder) / f"{stem}_{i}.{extension}").exists():
-            i += 1
-        target = Path(folder) / f"{stem}_{i}.{extension}"
+    return Path(folder), stem
+
+
+def _candidate(folder: Path, stem: str, extension: str, index: int) -> Path:
+    return folder / (f"{stem}.{extension}" if index == 0 else f"{stem}_{index + 1}.{extension}")
+
+
+def _reserve_output(media_path: str, out_dir: str | None, extension: str = 'srt') -> Path:
+    """排他创建占位文件；并发导出撞名时换下一个名字，不覆盖他人结果。"""
+    folder, stem = _output_base(media_path, out_dir)
+    for index in range(1000):
+        target = _candidate(folder, stem, extension, index)
+        try:
+            target.open('xb').close()
+            return target
+        except FileExistsError:
+            continue
+    raise RuntimeError('导出文件过多，请清理同名文件后重试')
+
+
+def _write_text_output(media_path: str, out_dir: str | None, text: str) -> Path:
+    """非覆盖导出：排他创建并直接写入，异常时删除半成品。"""
+    folder, stem = _output_base(media_path, out_dir)
+    for index in range(1000):
+        target = _candidate(folder, stem, 'srt', index)
+        try:
+            with target.open('x', encoding='utf-8', newline='') as fh:
+                fh.write(text)
+            return target
+        except FileExistsError:
+            continue
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
+    raise RuntimeError('导出文件过多，请清理同名文件后重试')
+
+
+def _overwrite_text_output(media_path: str, out_dir: str | None, text: str) -> Path:
+    """覆盖导出先写同目录临时文件，再原子替换，失败时保留旧文件。"""
+    folder, stem = _output_base(media_path, out_dir)
+    target = folder / f"{stem}.srt"
+    handle, name = tempfile.mkstemp(prefix='.subtitle-export-', suffix='.srt', dir=folder)
+    os.close(handle)
+    temporary = Path(name)
+    try:
+        with temporary.open('w', encoding='utf-8', newline='') as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
     return target
 
 
@@ -409,21 +451,6 @@ class Handler(BaseHTTPRequestHandler):
                                 "gpu": gpu_status()})
             elif path == "/api/models/download":
                 self.send_json({"ok": True, "download": DOWNLOADS.get()})
-            elif path == '/api/removal/models':
-                gpu_download = DOWNLOADS.get()
-                self.send_json({'ok': True, 'model': removal_model_status(), 'installation': REMOVAL_INSTALLER.get(),
-                                'gpu_installation': gpu_download if gpu_download.get('model') == 'gpu' else None})
-            elif path == '/api/removal/scan':
-                scan = REMOVAL_SCANNER.get(_qget(query, 'id', ''))
-                self.send_json({'ok': scan is not None, 'scan': scan}, 200 if scan else 404)
-            elif path == '/api/removal/info':
-                info = removal_video_info(_require_file(_qget(query, 'path')))
-                project = removal_project_file(info['path'])
-                settings = json.loads(project.read_text(encoding='utf-8')) if project.is_file() else None
-                self.send_json({'ok': True, 'info': info, 'project': settings})
-            elif re.fullmatch(r'/api/removal/jobs/[a-f0-9]{32}', path):
-                job = REMOVAL_JOBS.get(path.rsplit('/', 1)[1])
-                self.send_json({'ok': job is not None, 'job': job}, 200 if job else 404)
             elif path == "/api/config":
                 self.send_json({"ok": True, "config": _read_config(), "path": str(_config_file())})
             elif path == "/api/logs":
@@ -464,7 +491,9 @@ class Handler(BaseHTTPRequestHandler):
                 projects.sort(key=lambda p:p['updated_at'],reverse=True)
                 self.send_json({'ok':True,'projects':projects,'directory':str(PROJECT_DIR)})
             elif path == "/api/projects/load":
-                p = _require_file(_qget(query, "path"))
+                p = _clean_path(_qget(query, "path"))
+                if not os.path.isfile(p) and not _project_path(p).is_file():
+                    raise FileNotFoundError('素材和工程记录均不存在：' + p)
                 project, revision = _load_project(p)
                 if project is not None:
                     validation.cues(project.get("cues", []))
@@ -472,7 +501,7 @@ class Handler(BaseHTTPRequestHandler):
                     validation.mapping(project.get("settings", {}), "工程settings")
                     # 载入旧工程时补做全文幻觉检测；已标记或用户恢复过导出的条目不重复处理。
                     flagged = hallucination.mark(project.get("cues", []))
-                    self.send_json({"ok": True, "project": project, "revision": revision,
+                    self.send_json({"ok": True, "project": project, "revision": revision,"source_available":os.path.isfile(p),
                                     "hallucination": {"count": len(flagged)}})
                 else:
                     self.send_json({"ok": True, "project": None})
@@ -509,53 +538,16 @@ class Handler(BaseHTTPRequestHandler):
             body = self.read_json()
             if path == "/api/jobs":
                 self._create_job(body)
-            elif path == '/api/removal/models/install':
-                with TASK_START_LOCK:
-                    if REMOVAL_JOBS.busy() or any(j.status in ('queued', 'running') for j in list(JOBS.jobs.values())) or DOWNLOADS.get()['status'] in ('downloading', 'preparing'):
-                        raise ValueError('请先完成或取消现有任务，再准备视频修复模型')
-                    self.send_json({'ok': True, 'installation': REMOVAL_INSTALLER.start(body.get('device', 'cuda'))})
-            elif path == '/api/removal/models/cancel':
-                self.send_json({'ok': True, 'installation': REMOVAL_INSTALLER.cancel()})
-            elif path == '/api/removal/jobs':
-                with TASK_START_LOCK:
-                    if REMOVAL_SCANNER.busy():
-                        raise ValueError('请先完成或取消字幕时间段扫描')
-                    if any(j.status in ('queued', 'running') for j in list(JOBS.jobs.values())) or DOWNLOADS.get()['status'] in ('downloading', 'preparing'):
-                        raise ValueError('请先完成或取消现有识别/模型下载任务')
-                    self.send_json({'ok': True, 'job': REMOVAL_JOBS.submit(body)})
-            elif path == '/api/removal/scan':
-                with TASK_START_LOCK:
-                    if REMOVAL_JOBS.busy() or any(j.status in ('queued', 'running') for j in list(JOBS.jobs.values())):
-                        raise ValueError('请先完成或取消视频/识别任务')
-                    self.send_json({'ok': True, 'scan': REMOVAL_SCANNER.start(body)})
-            elif path == '/api/removal/scan/cancel':
-                self.send_json({'ok': True, 'scan': REMOVAL_SCANNER.cancel(body.get('scan_id', ''))})
-            elif re.fullmatch(r'/api/removal/jobs/[a-f0-9]{32}/cancel', path):
-                job = REMOVAL_JOBS.cancel(path.split('/')[4])
-                self.send_json({'ok': job is not None, 'job': job}, 200 if job else 404)
-            elif path == '/api/removal/project':
-                request = validate_removal_request({**body, 'segments': None, 'region': body.get('region') or {'x': 0, 'y': 0, 'width': 1, 'height': 1}, 'preview': False, 'output_dir': str(OUTPUT_DIR)})
-                settings = {key: request[key] for key in ('path', 'region', 'start', 'end', 'max_edge', 'format', 'device')}
-                settings['segments'] = validate_removal_segments(body.get('segments'), request['info']['duration'], require_enabled=False)
-                settings['updated_at'] = time.time()
-                if body.get('region') is None:
-                    settings['region'] = None
-                atomic_json(removal_project_file(request['path']), settings)
-                self.send_json({'ok': True})
             elif path == "/api/alignment/jobs":
                 with TASK_START_LOCK:
                     self._create_alignment_job(body)
             elif path == "/api/models/download":
                 with TASK_START_LOCK:
-                    if REMOVAL_JOBS.busy() or REMOVAL_INSTALLER.busy():
-                        raise ValueError('请先完成或取消视频修复任务')
                     if any(job.status in ("queued", "running") for job in list(JOBS.jobs.values())):
                         raise ValueError("请先完成或取消识别任务，再下载模型")
                     self.send_json({"ok": True, "download": DOWNLOADS.start(body.get("model", ""))})
             elif path == "/api/runtime/gpu":
                 with TASK_START_LOCK:
-                    if REMOVAL_JOBS.busy() or REMOVAL_INSTALLER.busy():
-                        raise ValueError('请先完成或取消视频修复任务')
                     if any(job.status in ("queued", "running") for job in list(JOBS.jobs.values())):
                         raise ValueError("请先完成或取消识别任务，再下载 GPU 环境")
                     self.send_json({"ok": True, "download": DOWNLOADS.start_gpu()})
@@ -583,8 +575,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'ok': True, 'cancelled': MATCH_TASKS.cancel(str(body.get('request_id', '')))})
             elif path == "/api/segment":
                 self._segment(body)
-            elif path == "/api/segment/merge":
-                self._merge(body)
             elif path == "/api/projects/save":
                 self._save_project(body)
             elif path == "/api/projects/backup":
@@ -629,10 +619,6 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- API 实现 ----------
 
     def _create_alignment_job(self, body: dict) -> None:
-        if REMOVAL_SCANNER.busy():
-            raise ValueError('字幕时间段正在扫描，请先完成或取消')
-        if REMOVAL_JOBS.busy() or REMOVAL_INSTALLER.busy():
-            raise ValueError('视频修复正在运行，请完成或取消后再对齐')
         if DOWNLOADS.get()["status"] in ("downloading", "preparing"):
             raise ValueError("请先完成模型下载")
         path = _require_file(body.get("path", ""))
@@ -666,10 +652,6 @@ class Handler(BaseHTTPRequestHandler):
             self._create_job_locked(body)
 
     def _create_job_locked(self, body: dict) -> None:
-        if REMOVAL_SCANNER.busy():
-            raise ValueError('字幕时间段正在扫描，请先完成或取消')
-        if REMOVAL_JOBS.busy() or REMOVAL_INSTALLER.busy():
-            raise ValueError('视频修复正在运行，请完成或取消后再识别')
         if DOWNLOADS.get()["status"] in ("downloading", "preparing"):
             raise ValueError("模型正在下载或安装，请完成后再识别")
         path = _require_file(body.get("path", ""))
@@ -722,7 +704,7 @@ class Handler(BaseHTTPRequestHandler):
             cues, warnings = srt_io.parse_srt_text(text)
             encoding, name = "text", ""
         # 人工导入SRT仅提示；用户确认的片尾对白不能按ASR幻觉规则自动排除。
-        flagged = hallucination.mark(cues,auto_exclude=False)
+        flagged = hallucination.mark(cues)
         self.send_json({"ok": True, "cues": cues, "warnings": warnings,
                         "encoding": encoding, "name": name,
                         "hallucination": {"count": len(flagged)}})
@@ -761,8 +743,7 @@ class Handler(BaseHTTPRequestHandler):
             if not media_path:
                 raise ValueError('MKV 导出需要先导入视频或音频')
             with WRITE_LOCK:
-                target=_output_path(media_path,options.get('output_dir'),False,'mkv')
-                target.open('xb').close()
+                target=_reserve_output(media_path,options.get('output_dir'),'mkv')
             temp=None
             try:
                 handle,name=tempfile.mkstemp(prefix='.subtitle-export-',suffix='.mkv',dir=target.parent)
@@ -779,9 +760,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         with WRITE_LOCK:
             overwrite = bool(options.get("overwrite", False))
-            target = _output_path(media_path, options.get("output_dir"), overwrite)
-            with target.open("w" if overwrite else "x", encoding="utf-8", newline="") as fh:
-                fh.write(text)
+            target = (_overwrite_text_output(media_path, options.get("output_dir"), text) if overwrite
+                      else _write_text_output(media_path, options.get("output_dir"), text))
         self.send_json({"ok": True, "path": str(target), "count": len(cues)})
 
     def _parse_script(self, body: dict) -> None:
@@ -860,11 +840,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if body.get('mode')=='calibration':
             from core.calibration import normalize_cues
-            gap = validation.number(body.get('gap_seconds', .6), '停顿阈值', 0, MAX_GAP_SECONDS)
             keep_punc = validation.boolean(body.get('keep_punc', True), '标点符号')
-            keep_interjections = validation.boolean(body.get('keep_interjections', False), '语气词')
-            self.send_json({'ok': True, **normalize_cues(cues, max_width, gap, keep_punc=keep_punc,
-                                                        keep_interjections=keep_interjections)})
+            fingerprint = body.get('reference_fingerprint') or None
+            if fingerprint is not None and (not isinstance(fingerprint, str) or len(fingerprint) > 64):
+                raise ValueError('参考指纹无效')
+            self.send_json({'ok': True, **normalize_cues(cues, keep_punc=keep_punc,
+                                                        reference_fingerprint=fingerprint)})
             return
         gap_seconds = validation.number(body.get("gap_seconds", 0), "停顿阈值", 0, MAX_GAP_SECONDS)
         if not (0 <= gap_seconds <= MAX_GAP_SECONDS):
@@ -881,18 +862,6 @@ class Handler(BaseHTTPRequestHandler):
             result, _ = segment.repair_fragments(result,max_width,gap_seconds)
         self.send_json({"ok": True, "cues": result, "splits": splits, "gap_splits": gap_splits,
                         "estimated": estimated, "count": len(result)})
-
-    def _merge(self, body: dict) -> None:
-        cues = validation.cues(body.get("cues", []))
-        if not isinstance(cues, list):
-            raise ValueError("cues 必须是数组")
-        result, merged = segment.merge_cues(
-            cues,
-            max_width=validation.number(body.get("max_width", 20), "每行宽度", MIN_WIDTH, MAX_WIDTH),
-            max_duration=validation.number(body.get("max_duration", 7), "合并时长", 0.001, 60),
-            max_gap=validation.number(body.get("max_gap", 0.25), "合并间隔", 0, 2),
-        )
-        self.send_json({"ok": True, "cues": result, "merged": merged, "count": len(result)})
 
     def _save_config(self, body: dict) -> None:
         settings = validation.mapping(body.get("settings", {}), "settings")
@@ -920,7 +889,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"ok": True, "path": str(target), "updated_at": data["updated_at"]})
 
     def _save_project(self, body: dict, backup: bool = False) -> None:
-        media_path = _require_file(body.get("media_path") or body.get("source_path", ""))
+        media_path = _clean_path(body.get("media_path") or body.get("source_path", ""))
+        source_available = os.path.isfile(media_path)
+        if not source_available and not _project_path(media_path).is_file():
+            raise FileNotFoundError('素材不存在，也没有可继续编辑的工程记录：' + media_path)
         if not media.is_media(media_path) and Path(media_path).suffix.lower() != ".srt":
             raise ValueError("工程来源必须为媒体或SRT文件")
         cues = validation.cues(body.get("cues", []),repair_word_times=True)
@@ -930,23 +902,30 @@ class Handler(BaseHTTPRequestHandler):
         script_document=validation.mapping(body.get('script_document') or {},'script_document')
         if script_document:
             script_document=reference_match.parse_document(script_document.get('text'),script_document.get('sources'))
+        fingerprint = body.get('reference_fingerprint') or ''
+        if not isinstance(fingerprint, str):
+            raise ValueError('reference_fingerprint 必须是字符串')
         data = {
             "version": 2,
             "media_path": media_path if media.is_media(media_path) else "",
             "source_path": media_path,
             "cues": cues,
-            "initial_cues": validation.cues(body['initial_cues']) if body.get('initial_cues') is not None else None,
-            "media_identity": _media_identity(media_path) if media.is_media(media_path) else '',
+            "initial_cues": validation.cues(body['initial_cues'],repair_word_times=True) if body.get('initial_cues') is not None else None,
+            "media_identity": _media_identity(media_path) if source_available and media.is_media(media_path) else '',
             "script_lines": validation.lines(body.get("script_lines", [])),
             "script_name": str(body.get("script_name") or ""),
             "script_path": str(body.get("script_path") or ""),
             "script_names": validation.script_names(body.get("script_names", [])),
             "script_document": script_document,
+            "reference_fingerprint": fingerprint[:64],
             "subtitle_file": validation.mapping(body.get("subtitle_file") or {}, "subtitle_file"),
             "settings": validation.mapping(body.get("settings", {}), "settings"),
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         target = _project_path(media_path)
+        if not source_available:
+            previous=validation.mapping(json.loads(target.read_text(encoding='utf-8')),'已有工程')
+            data['media_identity']=previous.get('media_identity','')
         if backup:
             target = PROJECT_DIR / "backups" / (target.stem + "-" + secrets.token_hex(8) + ".json")
             data["revision"] = 0

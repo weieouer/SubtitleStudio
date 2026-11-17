@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 
 export async function runFrontendTests(source) {
   const results = [];
+  const appVersion = source.match(/APP_VERSION\s*=\s*['"]([^'"]+)/)?.[1];
   const extract = name => {
     const start = source.search(new RegExp(`^(?:async )?function ${name}\\(`, 'm'));
     const next = source.slice(start + 1).search(/^(?:async )?function \w+\(/m);
@@ -22,7 +23,7 @@ export async function runFrontendTests(source) {
         editRevision: 1, dirty: true },
       $: id => { if (!elements.has(id)) elements.set(id, {hidden: true, textContent: '', style: {}, disabled: false, setAttribute:noop}); return elements.get(id); },
       document: {activeElement: {blur: noop}}, window:{}, crypto: {randomUUID}, waveCanvas: null, cueBody: {querySelector:()=>null},
-      escapeHtml: String, toast: noop, renderAll: noop, renderTable: noop, renderScript: noop, updateButtons: noop, updateOverlay: noop,
+      subtitleText: value=>String(value??''), escapeHtml: String, toast: noop, renderAll: noop, renderTable: noop, renderScript: noop, updateButtons: noop, updateOverlay: noop,
       confirmDialog: async () => true, selectCue: noop,
       updateJob: noop, drawWave: noop, renderSubtitleSource: noop, downloadBusy: () => false, setSaveState: noop, playSound: noop,
       modelAvailable: () => true, collectSettings: () => ({mode: 'extract', model: 'medium', device: 'cpu', gap: .6, vad: true}),
@@ -30,14 +31,14 @@ export async function runFrontendTests(source) {
       matchScript: async () => true, exportSrt: async () => ({path: 'A.srt'}),
       rematchDerivedCues: async()=>true,
       verificationCache:null,
-      APP_VERSION: "3.1.0", projectConflicts: new Set(), projectVersions: new Map(), projectSaveChain: Promise.resolve(), configSaveChain: Promise.resolve(),
+      APP_VERSION: appVersion, projectConflicts: new Set(), projectVersions: new Map(), projectSaveChain: Promise.resolve(), configSaveChain: Promise.resolve(),
       HISTORY_LIMIT: 60, SAVE_DELAY: 1200, SESSION_TOKEN: 'test-token',
       jobMsg: {textContent: ''}, sleep: async () => {},
       setTimeout: callback => setTimeout(callback, 1), clearTimeout,
       ...overrides,
     });
     context.runReferenceMatch = body => context.api('/api/script/match',body);
-    vm.runInContext(['projectPath', 'editLocked', 'snapshot', 'restoreSnapshot', 'sameDocument', 'simplifiedText', 'normalizeCue', 'pushHistory', 'replaceCues', 'clamp', 'cueExcluded', 'verificationStageName', 'verificationStage', 'releaseVerificationExclusions', 'hasCompletedModification', 'completeModification', 'markNoReference', 'cueTimingIssues', 'cueVerificationIssues', 'computeCueVerification', 'cueVerification', 'cueReportVerdict', 'verificationStatistics', 'cueReportKey', 'countChangedCues', 'stopWaitingForJob', 'showVerificationReport', 'cueNeedsReview', 'canAdoptCue', 'adoptCue', 'adjustedPresentationCues', 'presentationCues', 'selectedCueIndices', 'contiguousSelection', 'formatElapsed', ...functions].map(extract).join('\n'), context);
+    vm.runInContext(['projectPath', 'projectPayload', 'cacheProjectDraft', 'trimHistory', 'editLocked', 'snapshot', 'restoreSnapshot', 'sameDocument', 'simplifiedText', 'normalizeCue', 'pushHistory', 'replaceCues', 'clamp', 'cueExcluded', 'verificationStageName', 'verificationStage', 'releaseVerificationExclusions', 'hasCompletedModification', 'completeModification', 'contentPass', 'contentSourceVisible', 'defaultShortcuts', 'shortcutKey', 'matchesShortcut', 'wheelModifier', 'confirmCueTiming', 'cueTextClass', 'cueStageStatuses', 'cueTimingIssues', 'cueInterjection', 'cueVerificationIssues', 'computeCueVerification', 'cueVerification', 'cueReportVerdict', 'verificationStatistics', 'cueReportKey', 'countChangedCues', 'stopWaitingForJob', 'showVerificationReport', 'cueNeedsReview', 'documentFingerprint', 'bindReferenceMatches', 'restoreReferenceBinding', 'adjustedPresentationCues', 'presentationCues', 'selectedCueIndices', 'contiguousSelection', 'formatElapsed', ...functions].map(extract).join('\n'), context);
     return context;
   };
   // 与 backend/core/calibration.py 的 reference_copy 合同一致：只复制已确认的参考文字，
@@ -50,11 +51,12 @@ export async function runFrontendTests(source) {
       const confirmed = ['high','typo','homophone','missing','extra'].includes(match.status)
         || (match.status === 'ambiguous' && !!match.candidate_confirmed);
       const usable = !!cue.text && !!reference.text && !reference.reference_only
-        && !match.stale && (match.query_text ?? cue.text) === cue.text;
+        && !match.stale && (match.query_text ?? cue.text) === cue.text
+        && (!body.reference_fingerprint || match.reference_fingerprint === body.reference_fingerprint);
       if (!confirmed || !usable) { pending_indices.push(index); return cue; }
       const target = body.keep_punc === false ? strip(reference.text) : reference.text;
       const next = {...cue, text:target, script_text:reference.text, words:[],
-        reference_match:{...match, status:'high', label:'参考一致', query_text:target,
+        reference_match:{...match, status:'high', label:'高度匹配', query_text:target,
           stale:false, differences:[]}, match_needs_review:false, verification_stage:'calibrate'};
       if (target !== cue.text) {
         next.edited = true;
@@ -65,7 +67,7 @@ export async function runFrontendTests(source) {
       return next;
     });
     return {mode:'reference_copy', cues, changed_indices, completed_indices, pending_indices,
-      count:cues.length, splits:0, merged:0, merge_suggestions:0};
+      count:cues.length};
   };
   const test = async (name, run) => {
     try { await run(); results.push({name, passed: true}); }
@@ -103,8 +105,18 @@ export async function runFrontendTests(source) {
       {text:'gamma',start:2,end:3,match_needs_review:true,alignment:{engine:'test',stale:true}},
     ]);
     assert.equal(stats.total, 3);
-    assert.equal(stats.aligned, 1);
+    assert.equal(stats.aligned, 0); // 导入继承的记录不能当作执行过对齐。
     assert.equal(stats.suspect, 2);
+  });
+
+  await test('raw_asr_score_alone_does_not_mark_a_cue_for_review', async () => {
+    const ctx = make({}, ['cueNeedsReview', 'cueStatistics']);
+    const stats = ctx.cueStatistics([
+      {text:'低分但正常',start:0,end:1,confidence:.2},
+      {text:'时间异常',start:2,end:2.1,alignment_error:'未得到可靠词时间'},
+    ]);
+    assert.equal(stats.suspect, 1);
+    assert.equal(ctx.cueNeedsReview({text:'低分但正常',start:0,end:1,confidence:.2}), false);
   });
 
   await test('legacy_single_line_settings_migrate_without_reversing_export_behavior', async () => {
@@ -228,7 +240,7 @@ export async function runFrontendTests(source) {
       return {revision: 2, updated_at: '2026-11-04 12:00:00'};
     }}, ['saveProject']);
     const first = ctx.saveProject();
-    await Promise.resolve();
+    for(let i=0;i<5&&!payloads.length;i++)await Promise.resolve();
     ctx.state.cues[0].text = '最新修改'; ctx.state.editRevision++;
     const second = ctx.saveProject();
     assert.equal(payloads.length, 1);
@@ -335,24 +347,15 @@ export async function runFrontendTests(source) {
     assert(messages.some(message=>message.includes('连续相邻')));
   });
 
-  await test('merge_suggestion_is_red_badge_and_counted_for_review',async()=>{
-    const ctx=make({},['escapeHtml','badgesHtml','cueReviewHtml','filteredRows']);
-    const cue=ctx.normalizeCue({start:0,end:.3,text:'中',merge_suggestion:{direction:'next',reason:'疑似拆出的短碎片'}},0);
-    ctx.state.cues=[cue,ctx.normalizeCue({start:.3,end:1,text:'毒的人'},1)];
-    ctx.state.filter='low';ctx.state.search='';
-    assert(ctx.cueNeedsReview(cue));assert(ctx.filteredRows().some(row=>row.i===0));
-    const badges=ctx.badgesHtml(cue);assert(badges.includes('建议合并'));assert(badges.includes('merge-suggest'));
-    assert(ctx.cueReviewHtml(cue,0).includes('建议合并'));
-  });
-
   await test('modified_completion_is_derived_and_reset_restores_original_text_timing_and_exclusion', async () => {
     const ctx=make({},['resetCues','undo','filteredRows','cueNeedsReview']);
     ctx.state.cues=[{start:0,end:1,text:'原文',is_noise:true},{start:1,end:2,text:'另一条'}].map(ctx.normalizeCue);
     ctx.state.initialCues=JSON.parse(JSON.stringify(ctx.state.cues));
     const before=ctx.snapshot();ctx.state.cues.forEach(ctx.completeModification);ctx.pushHistory(before);
     assert(ctx.state.cues.every(ctx.hasCompletedModification));assert.equal(ctx.state.cues[0].is_noise,true);
-    ctx.state.filter='low';ctx.state.search='';assert.equal(ctx.filteredRows().length,0);
-    ctx.undo();assert(ctx.state.cues.every(c=>!ctx.hasCompletedModification(c)));assert.equal(ctx.filteredRows().length,2);
+    ctx.state.filter='obvious';ctx.state.search='';assert.equal(ctx.filteredRows().length,0);
+    ctx.undo();assert(ctx.state.cues.every(c=>!ctx.hasCompletedModification(c)));
+    ctx.state.filter='all';assert.equal(ctx.filteredRows().length,2);
     ctx.state.cues[0].text='修改';ctx.state.cues[0].start=.3;ctx.state.cues[0].exclude_export=true;
     await ctx.resetCues();assert.equal(ctx.state.cues[0].text,'原文');assert.equal(ctx.state.cues[0].start,0);assert(!ctx.state.cues[0].exclude_export);
     ctx.undo();assert.equal(ctx.state.cues[0].text,'修改');assert.equal(ctx.state.cues[0].start,.3);assert(ctx.state.cues[0].exclude_export);
@@ -441,8 +444,8 @@ export async function runFrontendTests(source) {
     assert(!ctx.cueReviewHtml(cue,0).includes('你好，世界！'));
     ctx.state.settings.keepPunc=true;
     // 开启标点时保留参考原文的标点，不再二次规整。
-    assert(ctx.suggestHtml(cue,0).includes('你好，世界！12:30，3.5%'));
-    assert(ctx.cueReviewHtml(cue,0).includes('你好，世界！'));
+    assert(ctx.suggestHtml(cue,0).includes('你好世界！12:303.5%'));
+    assert(ctx.cueReviewHtml(cue,0).includes('你好世界！'));
     assert.equal(JSON.stringify(cue),original);
   });
 
@@ -496,7 +499,7 @@ export async function runFrontendTests(source) {
     let saves=0;
     const ctx=make({api:async()=>({ok:true,lines:[],document:{version:1,text:''},stats:{total:0}}),scheduleSave:()=>saves++},['applyScriptResult']);
     ctx.state.script=[{text:'保留剧本'}];ctx.state.scriptDocument=parsedBody({documents:[{name:'原.txt',text:'保留剧本'}]}).document;
-    ctx.state.scriptNames=['原.txt'];ctx.state.scriptName='原.txt';ctx.state.referenceGaps=[{text:'原漏句'}];
+    ctx.state.scriptNames=['原.txt'];ctx.state.scriptName='原.txt';
     ctx.state.cues[0].reference_match={reference:{text:'保留建议'}};ctx.state.history=['保留撤销'];ctx.state.redoStack=['保留重做'];
     const before=JSON.stringify(ctx.state);
     await assert.rejects(ctx.applyScriptResult(parsedScript('新剧本'),'新.txt'),/重启.*仅刷新页面无效/);
@@ -593,7 +596,7 @@ export async function runFrontendTests(source) {
     const cue={text:'正确台词',start:1,end:2,is_noise:true,needs_review:true,confidence:.5,verification_stage:'verify',
       reference_match:{status:'high',query_text:'正确台词'}};
     const before=JSON.stringify(cue),html=ctx.badgesHtml(cue);
-    assert(html.includes('参考一致'));assert(!html.includes('疑似噪音'));assert(!html.includes('未校对'));
+    assert(html.includes('校验通过'));assert(!html.includes('疑似噪音'));assert(!html.includes('未校对'));
     assert.equal(ctx.cueNeedsReview(cue),false);assert.equal(ctx.cueStatistics([cue]).suspect,0);
     assert.equal(JSON.stringify(cue),before);
   });
@@ -617,64 +620,80 @@ export async function runFrontendTests(source) {
     const ctx=make({escapeHtml:String},['badgesHtml']);
     ctx.state.settings.width=6;
     const long=ctx.badgesHtml({text:'一二三四五六七',start:0,end:2,verification_stage:'calibrate',reference_match:{status:'high',query_text:'一二三四五六七'}});
-    assert(long.includes('badge low'));assert(long.includes('疑似问题'));
-    const empty=ctx.badgesHtml({text:'',start:0,end:1,reference_match:{status:'high',query_text:''}});
-    assert(empty.includes('badge noise'));assert(empty.includes('明显问题'));
+    assert(long.includes('badge noise'));assert(long.includes('明显错误'));
+    const empty=ctx.badgesHtml({text:'',start:0,end:1,verification_stage:'verify',reference_match:{status:'high',query_text:''}});
+    assert(empty.includes('badge noise'));assert(empty.includes('明显错误'));
   });
 
   await test('ordinary_problems_are_yellow_and_obvious_timing_problems_are_red',async()=>{
     const ctx=make({escapeHtml:String},['cueNeedsReview','badgesHtml']);
-    const base={text:'先留着',start:61.35,end:62.11,reference_match:{status:'high',query_text:'先留着'}};
-    for(const cue of [{...base,reference_match:{status:'typo',label:'疑似错字'}},
-      {...base,reference_match:{status:'unmatched',label:'未匹配'}},
-      {...base,reference_match:{status:'ambiguous',label:'多候选匹配'}}]){
+    const base={verification_stage:'verify',text:'先留着',start:61.35,end:62.11,reference_match:{status:'high',query_text:'先留着'}};
+    for(const cue of [{...base,reference_match:{status:'typo',label:'疑似错字',reference:{text:'先留着吧'}}},
+      {...base,reference_match:{status:'extra',label:'疑似多字',reference:{text:'留着'}}},
+      {...base,reference_match:{status:'ambiguous',label:'多候选匹配',reference:{text:'先留着'}}}]){
       const html=ctx.badgesHtml(cue);assert(html.includes('badge low'));assert(html.includes('疑似问题'));
-      assert(!html.includes('参考一致'));assert.equal(ctx.cueNeedsReview(cue),true);
+      assert(!html.includes('校准通过'));assert.equal(ctx.cueNeedsReview(cue),true);
     }
     for(const cue of [{...base,start:50.18,end:62.02,verification_stage:'align'},{...base,alignment_error:'对齐结果异常拉长',verification_stage:'align'}]){
-      const html=ctx.badgesHtml(cue);assert(html.includes('badge noise'));assert(html.includes('明显问题'));
+      const html=ctx.badgesHtml(cue);assert(html.includes('badge noise'));assert(html.includes('明显错误'));
     }
   });
 
+  await test('content_pass_source_survives_timing_anomaly_after_alignment',async()=>{
+    const ctx=make({escapeHtml:String},['badgesHtml']);
+    const base={text:'正确台词',start:50.18,end:62.02,verification_stage:'align',
+      reference_match:{status:'high',query_text:'正确台词'}};
+    const verified=ctx.badgesHtml({...base,content_stage:'verify'});
+    assert(verified.includes('校验通过'));assert(verified.includes('明显错误'));
+    const calibrated=ctx.badgesHtml({...base,script_text:base.text,content_stage:'calibrate'});
+    assert(calibrated.includes('校准通过'));assert(calibrated.includes('明显错误'));
+    // 内容本身有问题时不能再显示来源通过标签。
+    const bad=ctx.badgesHtml({...base,start:0,end:1,content_stage:'verify',reference_match:{status:'typo',query_text:'正确台词',reference:{text:'错误台词'}}});
+    assert(!bad.includes('校验通过'));assert(bad.includes('疑似问题'));
+  });
+
   await test('labels_do_not_close_export_and_legacy_auto_exclusions_are_released',async()=>{
-    const ctx=make({escapeHtml:String},['releaseVerificationExclusions']);
-    const auto=ctx.normalizeCue({text:'自动排除',start:0,end:1,exclude_export:true,verification_excluded:true},0);
-    const manual=ctx.normalizeCue({text:'手动排除',start:1,end:2,exclude_export:true,review_decision:'non_script'},1);
-    const hallucinated=ctx.normalizeCue({text:'幻觉',start:2,end:3,exclude_export:true,verification_excluded:true,
-      hallucination:{confirmed:true}},2);
-    const pass=ctx.normalizeCue({text:'通过',start:3,end:4},3);
-    const restored=ctx.releaseVerificationExclusions([auto,manual,hallucinated,pass]);
-    assert.equal(restored,1);
+    const ctx=make({},['releaseVerificationExclusions']);
+    const auto={text:'自动排除',start:0,end:1,exclude_export:true,verification_excluded:true};
+    const manual={text:'手动排除',start:1,end:2,exclude_export:true,review_decision:'non_script'};
+    const hallucinated={text:'幻觉',start:2,end:3,exclude_export:true,hallucination:{confirmed:true}};
+    const interjection={text:'哈哈',start:3,end:4,exclude_export:true,interjection_excluded:true};
+    const pass={text:'通过',start:4,end:5};
+    const restored=ctx.releaseVerificationExclusions([auto,manual,hallucinated,interjection,pass]);
+    assert.equal(restored,3);
     assert.equal(auto.exclude_export,false);assert(!('verification_excluded' in auto));
     assert.equal(manual.exclude_export,true);
-    assert.equal(hallucinated.exclude_export,true);
-    assert(!('verification_excluded' in hallucinated));
+    assert.equal(hallucinated.exclude_export,false);
+    assert.equal(interjection.exclude_export,false);assert(!('interjection_excluded' in interjection));
   });
 
   await test('interjection_cue_is_red_and_explains_export_behavior',async()=>{
     const ctx=make({escapeHtml:String},['computeCueVerification','cueNeedsReview','badgesHtml']);
-    const cue={text:'哈哈哈',start:0,end:.5,interjection:true};
+    const cue={text:'哈哈哈',start:0,end:.5,interjection:true,verification_stage:'verify'};
     let check=ctx.computeCueVerification(cue);
-    assert.equal(check.status,'suspect');assert.equal(check.obvious,true);assert.equal(check.label,'语气词');
+    assert.equal(check.status,'suspect');assert.equal(check.obvious,true);assert.equal(check.label,'明显错误');
     assert.match(check.reason,/由你判断后删除或保留/);
     assert(ctx.cueNeedsReview(cue));
-    const html=ctx.badgesHtml(cue);assert(html.includes('badge noise'));assert(html.includes('语气词'));
+    const html=ctx.badgesHtml(cue);assert(html.includes('badge noise'));assert(html.includes('明显错误'));assert(html.includes('语气词'));
     ctx.state.settings.keepInterjections=true;
     check=ctx.computeCueVerification(cue);
-    assert.equal(check.label,'语气词');assert.match(check.reason,/正常导出/);
-    assert.match(ctx.computeCueVerification({...cue,review_decision:'included'}).reason,/手动开启导出/);
-    assert.match(ctx.computeCueVerification({...cue,review_decision:'non_script'}).reason,/已手动标为不导出/);
+    assert.equal(check.status,'passed');
+    ctx.state.settings.keepInterjections=false;
+    assert.equal(ctx.computeCueVerification({...cue,edited:true,modification_complete:{text:cue.text}}).label,'明显错误');
+    assert.equal(ctx.computeCueVerification({text:'哼',start:0,end:.5}).label,'明显错误');
+    ctx.state.settings.width=2;
+    assert.equal(ctx.computeCueVerification({text:'正常对白过长',start:0,end:1}).label,'明显错误');
     assert.notEqual(ctx.computeCueVerification({text:'你呀，快走',start:0,end:1,interjection:false})?.label,'语气词');
   });
 
   await test('modified_done_is_green_and_suppresses_old_problem_or_recheck_labels',async()=>{
     const ctx=make({escapeHtml:String},['cueNeedsReview','badgesHtml']);
-    const cue={text:'修改台词',start:0,end:1,reference_match:{status:'high',query_text:'原台词'}};
+    const cue={text:'修改台词',script_text:'修改台词',start:0,end:1,reference_match:{status:'high',query_text:'原台词'}};
     ctx.completeModification(cue);cue.reference_match.stale=true;
-    const html=ctx.badgesHtml(cue);assert(html.includes('文字已确认'));assert(html.includes('modified-done'));
+    const html=ctx.badgesHtml(cue);assert(html.includes('校准通过'));assert(html.includes('verified'));
     assert(!html.includes('疑似问题'));assert(!html.includes('待重新校验'));assert(!html.includes('已完成'));assert(!ctx.cueNeedsReview(cue));
     cue.reference_match={status:'high',query_text:cue.text};cue.modification_complete=false;cue.exclude_export=true;cue.verification_stage='verify';
-    assert(ctx.badgesHtml(cue).includes('参考一致'));assert(ctx.cueExcluded(cue));
+    assert(ctx.badgesHtml(cue).includes('校验通过'));assert(ctx.cueExcluded(cue));
   });
 
   await test('manual_srt_and_mkv_export_choose_directory_before_writing',async()=>{
@@ -709,12 +728,10 @@ export async function runFrontendTests(source) {
     ctx.selectAllCues(false);assert.equal(ctx.state.selectedCues.size,0);assert.equal(ctx.state.selected,-1);
   });
 
-  await test('bulk_delete_and_export_marking_are_single_step_undoable',async()=>{
-    const ctx=make({},['selectAllCues','deleteCue','toggleSelectedExport','undo']);
+  await test('bulk_delete_is_single_step_undoable',async()=>{
+    const ctx=make({},['selectAllCues','deleteCue','undo']);
     ctx.state.cues=[{start:0,end:1,text:'甲'},{start:2,end:3,text:'乙',exclude_export:true},{start:4,end:5,text:'丙'}].map(ctx.normalizeCue);
     ctx.state.selectedCues=new Set([0,2]);
-    ctx.toggleSelectedExport();assert(ctx.state.cues.every(c=>ctx.cueExcluded(c)));
-    ctx.toggleSelectedExport();assert(!ctx.cueExcluded(ctx.state.cues[0]));assert(ctx.cueExcluded(ctx.state.cues[1]));
     ctx.deleteCue();assert.deepEqual([...ctx.state.cues.map(c=>c.text)],['乙']);ctx.undo();assert.equal(ctx.state.cues.length,3);
     ctx.state.selectedCues=new Set([0,1,2]);ctx.deleteCue();assert.equal(ctx.state.cues.length,0);ctx.undo();assert.equal(ctx.state.cues.length,3);
   });
@@ -755,8 +772,24 @@ export async function runFrontendTests(source) {
     ctx.state.selectedCues=new Set([1]);await ctx.calibrateAll();
     assert.equal(requests,1);
     assert.equal(ctx.state.cues[0].text,'错字0');assert.equal(ctx.state.cues[1].text,'错字1');
-    assert.equal(ctx.state.cues[1].verification_stage,undefined);
-    assert.equal(ctx.state.history.length,0);
+    assert.equal(ctx.state.cues[1].verification_stage,'calibrate');
+    assert.equal(ctx.state.history.length,1);
+  });
+
+  await test('reference_fingerprint_mismatch_blocks_calibration',async()=>{
+    const ctx=make({api:async(path,body)=>copyReferenceCues(body)},['calibrateAll']);
+    ctx.state.scriptDocument={text:'参考正文',sources:[{id:'source-0',name:'剧本',start:0,end:4}]};
+    ctx.state.script=[{text:'参考正文'}];
+    const fingerprint=ctx.documentFingerprint(ctx.state.scriptDocument,ctx.state.script);
+    ctx.state.referenceFingerprint=fingerprint;
+    const cue=ctx.normalizeCue({text:'错字',start:0,end:1,reference_match:{status:'typo',query_text:'错字',
+      reference:{text:'参考正文'},reference_fingerprint:'other'}},0);
+    ctx.state.cues=[cue];ctx.state.selectedCues=new Set([0]);
+    await ctx.calibrateAll();
+    assert.equal(ctx.state.cues[0].text,'错字');
+    ctx.state.cues[0].reference_match.reference_fingerprint=fingerprint;
+    await ctx.calibrateAll();
+    assert.equal(ctx.state.cues[0].text,'参考正文');
   });
 
   await test('batch_recognition_supports_eleven_selected_in_current_version',async()=>{
@@ -799,7 +832,7 @@ export async function runFrontendTests(source) {
     const ctx=make({displayedSubtitleText:String,collectSettings:()=>({keepPunc:true,wrapSubtitles:true}),
       api:async(path,body)=>path==='/api/dialog'?{path:'C:/导出'}:(payload=body,{path:'C:/导出/字幕.srt',count:2})},['exportSrt']);
     ctx.state.cues=[{text:'甲',start:1.123,end:1.456,is_noise:true},{text:'乙',start:2.234,end:3.789},{text:'丙',start:4,end:5,exclude_export:true}];
-    ctx.state.selectedCues=new Set([0]);ctx.state.search='甲';ctx.state.filter='low';
+    ctx.state.selectedCues=new Set([0]);ctx.state.search='甲';ctx.state.filter='unchecked';
     Object.assign(ctx.state.settings,{subtitleLead:1,subtitleTail:1,subtitleMin:5,subtitleMax:.2});
     const before=JSON.stringify(ctx.state.cues);await ctx.exportSrt(false);
     assert.deepEqual([...payload.cues.map(c=>[c.start,c.end,c.text])],[[1.123,1.456,'甲'],[2.234,3.789,'乙']]);
@@ -821,10 +854,10 @@ export async function runFrontendTests(source) {
   });
 
   await test('out_of_context_global_hit_is_red_and_not_adoptable',async()=>{
-    const ctx=make({escapeHtml:String},['cueNeedsReview','badgesHtml','suggestHtml']);
-    const cue={text:'其他地方存在的话',start:1,end:2,script_text:'',reference_match:{status:'context_mismatch',label:'疑似多余台词',warning:'当前片段无此台词，需试听',context:{status:'outside'},reference:null}};
-    assert(ctx.badgesHtml(cue).includes('badge noise'));assert(ctx.badgesHtml(cue).includes('明显问题'));
-    assert(ctx.suggestHtml(cue,0).includes('当前片段无此台词'));assert(ctx.cueNeedsReview(cue));assert(!ctx.canAdoptCue(cue));
+    const ctx=make({escapeHtml:String,subtitleText:String},['cueNeedsReview','badgesHtml','suggestHtml']);
+    const cue={verification_stage:'verify',text:'其他地方存在的话',start:1,end:2,script_text:'',reference_match:{status:'context_mismatch',label:'疑似多余台词',warning:'当前片段无此台词，需试听',context:{status:'outside'},reference:null}};
+    assert(ctx.badgesHtml(cue).includes('badge noise'));assert(ctx.badgesHtml(cue).includes('明显错误'));
+    assert(ctx.suggestHtml(cue,0).includes('当前片段无此台词'));assert(ctx.cueNeedsReview(cue));
   });
 
   await test('editable_subtitle_punctuation_toggle_is_reversible_and_keeps_raw_text',async()=>{
@@ -833,7 +866,7 @@ export async function runFrontendTests(source) {
     const ctx=make({window:chinese.window},['subtitleText','editableCueText']);
     const raw='你好，世界！12:30，3.5%';ctx.state.settings.keepPunc=false;
     const hidden=ctx.editableCueText(raw);assert(!/[，！]/.test(hidden));assert(hidden.includes('12:30'));assert(hidden.includes('3.5%'));
-    ctx.state.settings.keepPunc=true;assert.equal(ctx.editableCueText(raw),raw);
+    ctx.state.settings.keepPunc=true;assert.equal(ctx.editableCueText(raw),'你好世界！12:303.5%');
     ctx.state.settings.keepPunc=false;assert.equal(ctx.editableCueText(raw),hidden);
     assert.equal(raw,'你好，世界！12:30，3.5%');
   });
@@ -846,15 +879,15 @@ export async function runFrontendTests(source) {
     assert.equal(ctx.mergeEditedCueText('你好，世界。','您好世界'),'您好，世界。');
     assert.equal(ctx.mergeEditedCueText('你好，世界。','你好世界啊'),'你好，世界啊。');
     assert.equal(ctx.mergeEditedCueText('你好，世界。',''),'');
-    ctx.state.settings.keepPunc=true;assert.equal(ctx.mergeEditedCueText('你好，世界。','你好世界'),'你好世界');
+    ctx.state.settings.keepPunc=true;assert.equal(ctx.mergeEditedCueText('你好，世界。','你好世界'),'你好，世界。');
   });
 
   await test('split_badge_only_marks_actual_long_text_width_splits',async()=>{
     const ctx=make({escapeHtml:String},['cueNeedsReview','badgesHtml']);
     assert(!ctx.badgesHtml({source:'gap_split'}).includes('已分段'));
     assert(!ctx.badgesHtml({source:'split',segmentation:'manual_midpoint',width_split:false}).includes('已分段'));
-    assert(ctx.badgesHtml({source:'split',width_split:true}).includes('已分段'));
-    assert(ctx.badgesHtml({source:'split',segmentation:'dynamic_programming_word_pause'}).includes('已分段'));
+    assert(!ctx.badgesHtml({source:'split',width_split:true}).includes('已分段'));
+    assert(!ctx.badgesHtml({source:'split',segmentation:'dynamic_programming_word_pause'}).includes('已分段'));
     assert(!ctx.badgesHtml({source:'merged',width_split:true}).includes('已分段'));
   });
 
@@ -885,7 +918,7 @@ export async function runFrontendTests(source) {
     assert.equal(ctx.$('#reportAfterSuspect').textContent,'0');
     assert.equal(ctx.$('#reportAfterPassed').textContent,'1');
     const html=ctx.badgesHtml(ctx.state.cues[0]);
-    assert(html.includes('文字已确认'));assert(!html.includes('疑似问题'));
+    assert(html.includes('校准通过'));assert(!html.includes('疑似问题'));
   });
 
   await test('calibration_without_reference_keeps_text_pending',async()=>{
@@ -893,9 +926,11 @@ export async function runFrontendTests(source) {
     ctx.state.script=[{text:'剧本'}];
     ctx.state.cues=[ctx.normalizeCue({text:'原字幕',start:0,end:1},0)];
     const before=JSON.stringify(ctx.state.cues);await ctx.calibrateAll();
-    assert.equal(JSON.stringify(ctx.state.cues),before);
+    assert.equal(ctx.state.cues[0].text,'原字幕');
+    assert.equal(ctx.state.cues[0].verification_stage,'calibrate');
+    assert.equal(ctx.$('#reportAfterObvious').textContent,'1');
     assert.equal(ctx.$('#reportAfterSuspect').textContent,'0');
-    assert.equal(ctx.state.history.length,0);
+    assert.equal(ctx.state.history.length,1);
   });
 
   await test('one_click_calibration_accepts_more_than_ten_selected_cues_and_undoes_once',async()=>{
@@ -933,13 +968,22 @@ export async function runFrontendTests(source) {
     cue.text='新台词';assert.equal(ctx.hasCompletedModification(cue),false);
   });
 
+  await test('content_pass_source_and_alignment_pass_are_shown_together',async()=>{
+    const ctx=make({escapeHtml:String},['badgesHtml']);
+    const cue={text:'人工修改后的台词',script_text:'人工修改后的台词',start:0,end:1,reference_match:{status:'high',query_text:'人工修改后的台词'}};
+    ctx.completeModification(cue);cue.verification_stage='align';cue.content_stage='verify';cue.alignment={engine:'fixture'};
+    const html=ctx.badgesHtml(cue);
+    assert(html.includes('校准通过'));assert(html.includes('对齐通过'));
+    assert(html.includes('verified'));assert(html.includes('verified'));
+  });
+
   await test('emotion_punctuation_is_consistent_in_editor_reference_preview_and_toggle',async()=>{
     const chinese={window:{},OpenCC:{Converter:()=>value=>value}};
     vm.runInNewContext(readFileSync(new URL('../frontend/js/chinese.js',import.meta.url),'utf8'),chinese);
     const ctx=make({window:chinese.window},['subtitleText','editableCueText']);
     const raw='“你好，朋友。”你好吗？快走！ 3.5% 12:30';
     ctx.state.settings.keepPunc=true;
-    assert.equal(ctx.subtitleText(raw),raw);
+    assert.equal(ctx.subtitleText(raw),'你好朋友你好吗？快走！ 3.5% 12:30');
     assert.equal(ctx.editableCueText(raw),ctx.subtitleText(raw));
     ctx.state.settings.keepPunc=false;
     const plain=ctx.subtitleText(raw);
@@ -958,8 +1002,8 @@ export async function runFrontendTests(source) {
     ctx.state.selectedCues=new Set([1,2]);await ctx.calibrateAll();
     assert.equal(bodies.length,1);
     assert.deepEqual([...bodies[0].cues.map(c=>c.text)],['错','毒的人']);
-    assert.equal(bodies[0].keep_punc,true);assert.equal(bodies[0].max_width,20);
-    assert.equal(bodies[0].keep_interjections,false);
+    assert.equal(bodies[0].keep_punc,true);
+    assert.equal('max_width' in bodies[0],false);assert.equal('keep_interjections' in bodies[0],false);
     assert.equal(ctx.state.cues.length,4);
     assert.equal(JSON.stringify(ctx.state.cues[0]),beforeFirst);
     assert.equal(JSON.stringify(ctx.state.cues[3]),beforeLast);
@@ -968,8 +1012,7 @@ export async function runFrontendTests(source) {
   });
 
   await test('calibration_rejects_old_backend_and_structural_changes',async()=>{
-    const ctx=make({api:async(path,body)=>({mode:'calibration',cues:body.cues,changed_indices:[],
-      merged:1,merge_suggestions:1,splits:0})},['calibrateAll']);
+    const ctx=make({api:async(path,body)=>({mode:'calibration',cues:body.cues,changed_indices:[]})},['calibrateAll']);
     ctx.state.script=[{text:'参考'}];
     ctx.state.cues=[ctx.normalizeCue({text:'原',start:0,end:1,script_text:'新',
       reference_match:{status:'typo',query_text:'原',reference:{text:'新'}}},0)];
@@ -1000,22 +1043,19 @@ export async function runFrontendTests(source) {
     const ctx=make({escapeHtml:String},['computeCueVerification']);
     const base={text:'正确台词',start:0,end:1,reference_match:{status:'high',query_text:'正确台词'}};
     assert.equal(ctx.computeCueVerification(base),null);
-    for(const [stage,label] of [['verify','参考一致'],['calibrate','已校准'],['align','自动对齐完成']]){
-      assert.equal(ctx.computeCueVerification({...base,verification_stage:stage}).label,label);
+    for(const [stage,label] of [['verify','校验通过'],['calibrate','校准通过'],['align','对齐通过']]){
+      assert.equal(ctx.computeCueVerification({...base,verification_stage:stage,alignment:stage==='align'?{engine:'fixture'}:undefined}).label,label);
     }
     const typo={text:'错字',start:0,end:1,verification_stage:'align',
       reference_match:{status:'typo',query_text:'错字',reference:{text:'正字'}}};
-    assert.equal(ctx.computeCueVerification(typo).label,'疑似问题');
+    assert.equal(ctx.computeCueVerification(typo).label,'轻微错误');
     const failed={...base,verification_stage:'align',alignment_error:'未得到可靠对齐时间'};
-    assert.equal(ctx.computeCueVerification(failed).label,'明显问题');
-    const merge={direction:'next'};
-    assert.equal(ctx.cueReportVerdict({...base,verification_stage:'verify',merge_suggestion:merge}),'passed');
-    assert.equal(ctx.cueReportVerdict({...base,verification_stage:'calibrate',merge_suggestion:merge}),'obvious');
+    assert.equal(ctx.computeCueVerification(failed).label,'明显错误');
   });
   await test('punctuation_toggle_preserves_raw_ellipsis_and_decimal',async()=>{
     const chinese={window:{},OpenCC:{Converter:()=>value=>value}};
     vm.runInNewContext(readFileSync(new URL('../frontend/js/chinese.js',import.meta.url),'utf8'),chinese);
-    assert.equal(chinese.window.SubtitleChinese.normalizePunctuation('我...不知道，3.5呢？'),'我...不知道，3.5呢？');
+    assert.equal(chinese.window.SubtitleChinese.normalizePunctuation('我...不知道，3.5呢？'),'我...不知道3.5呢？');
     assert.equal(chinese.window.SubtitleChinese.stripPunctuation('我……不知道，3.5呢？'),'我不知道3.5呢');
   });
   await test('persistent_disconnect_unlocks_editing_and_resumes_same_task_without_resubmit', async () => {
@@ -1053,20 +1093,21 @@ export async function runFrontendTests(source) {
     const ctx=make({restoredScriptNames:()=>[],applyProjectSettings:noop,api:async(path,body)=>{
       calls.push(path);
       if(path==='/api/projects/backup'){assert.equal(body.cues[0].text,'原字幕');return {path:'backup.json'};}
-      return {revision:9,project:{cues:[{start:0,end:1,text:'其他页面'}],script_lines:[],settings:{}}};
+      return {revision:9,project:{cues:[{start:0,end:1,text:'其他页面'}],script_lines:[],script_path:'server-reference.txt',settings:{}}};
     }},['resolveProjectConflict']);
     ctx.projectConflicts.add('A.wav');await ctx.resolveProjectConflict();
     assert.equal(calls[0],'/api/projects/backup');assert.equal(ctx.state.cues[0].text,'其他页面');
     assert.equal(ctx.projectVersions.get('A.wav'),9);assert(!ctx.projectConflicts.has('A.wav'));
+    assert.equal(ctx.state.scriptPath,'server-reference.txt');
     assert(!ctx.state.dirty);
   });
   await test('content_confirmation_never_masks_timing_errors_or_removes_review_filter',async()=>{
     const ctx=make({},['badgesHtml','filteredRows','cueStatistics']);
-    const cue={text:'确认文字',start:0,end:1,edited:true,verification_stage:'verify',alignment:{engine:'fixture'},alignment_error:'无法定位'};
-    ctx.state.cues=[cue];ctx.state.filter='low';ctx.state.search='';
+    const cue={text:'确认文字',script_text:'确认文字',start:0,end:1,edited:true,verification_stage:'align',content_stage:'verify',alignment:{engine:'fixture'},alignment_error:'无法定位'};
+    ctx.state.cues=[cue];ctx.state.filter='obvious';ctx.state.search='';
     assert.equal(ctx.hasCompletedModification(cue),true);
-    assert.equal(ctx.computeCueVerification(cue).label,'明显问题');
-    const html=ctx.badgesHtml(cue);assert(html.includes('文字已确认'));assert(html.includes('无法定位'));
+    assert.equal(ctx.computeCueVerification(cue).label,'明显错误');
+    const html=ctx.badgesHtml(cue);assert(html.includes('校准通过'));assert(html.includes('明显错误'));assert(html.includes('无法定位'));
     assert.equal(ctx.cueReportVerdict(cue),'obvious');assert.equal(ctx.filteredRows().length,1);
     assert.equal(ctx.cueStatistics([cue]).aligned,0);assert.equal(ctx.cueStatistics([cue]).suspect,1);
   });
@@ -1110,6 +1151,245 @@ export async function runFrontendTests(source) {
     const ctx=make({displayedSubtitleText:String,api:async path=>path==='/api/dialog'?{path:'D:/exports'}:{path:'D:/exports/film_2.srt',count:1}},['exportSrt']);
     await ctx.exportSrt(false);assert.equal(ctx.state.lastExport.path,'D:/exports/film_2.srt');
     assert.equal(ctx.$('#exportResult').hidden,false);assert.equal(ctx.$('#exportResultPath').textContent,'D:/exports/film_2.srt');
+  });
+  await test('paired_extra_characters_are_yellow_unmatched_is_red_and_manual_content_passes',async()=>{
+    const ctx=make({},['badgesHtml']);ctx.state.script=[{text:'我们明天去学校'}];
+    const paired={text:'我们明天去去学校',start:0,end:1,verification_stage:'calibrate',
+      reference_match:{status:'extra',query_text:'我们明天去去学校',reference:{text:'我们明天去学校'}}};
+    assert.equal(ctx.cueReportVerdict(paired,{requireReference:true}),'suspect');
+    assert(ctx.badgesHtml(paired).includes('疑似问题'));
+    const missing={...paired,reference_match:{status:'unmatched',query_text:paired.text,reference:null}};
+    assert.equal(ctx.cueReportVerdict(missing,{requireReference:true}),'obvious');
+    assert(ctx.badgesHtml(missing).includes('明显错误'));
+    ctx.completeModification(missing);
+    assert.equal(ctx.cueReportVerdict(missing,{requireReference:true}),'passed');
+  });
+
+  await test('old_missing_reference_records_do_not_restore_blank_subtitle_rows',async()=>{
+    const ctx=make();ctx.state.script=[{text:'同一份参考'}];ctx.state.cues=[];
+    const fingerprint=ctx.documentFingerprint(null,ctx.state.script);
+    assert(ctx.restoreReferenceBinding({reference_fingerprint:fingerprint,reference_gaps:[{text:'参考未匹配内容'}]}));
+    assert(!ctx.snapshot().includes('referenceGaps'));assert.equal(ctx.state.cues.length,0);
+    assert.equal(ctx.verificationStatistics([],{referenceGaps:[{text:'未匹配'}]}).total,0);
+    ctx.replaceCues([{text:'真实字幕',start:0,end:1},{text:'   ',start:1,end:2}],{reset:true});
+    assert.equal(ctx.state.cues.length,1);assert.equal(ctx.state.cues[0].text,'真实字幕');
+  });
+  await test('playback_index_matches_linear_lookup_with_overlaps_seeks_and_revision_changes',async()=>{
+    const ctx=make({},['findCueAt']);
+    ctx.state.cues=[{text:'晚',start:3,end:4},{text:'长',start:0,end:5},{text:'短',start:1,end:2}];
+    for(const t of [-1,0,1,1.9,2,3,4,5,3,.5]){
+      assert.equal(ctx.findCueAt(t,true),ctx.state.cues.find(c=>t>=c.start&&t<c.end)||null);
+    }
+    ctx.state.cues[0].start=6;ctx.state.cues[0].end=7;ctx.state.editRevision++;
+    assert.equal(ctx.findCueAt(3,true).text,'长');assert.equal(ctx.findCueAt(6,true).text,'晚');
+  });
+  await test('undo_history_has_a_memory_budget_and_retains_the_last_large_step',async()=>{
+    const ctx=make();const history=Array(8).fill('x'.repeat(2*1024*1024));ctx.trimHistory(history);
+    assert.equal(history.length,4);history.push('x'.repeat(9*1024*1024));ctx.trimHistory(history);assert.equal(history.length,1);
+  });
+  await test('verification_preserves_explicit_scope_and_never_auto_checks_first_cue',async()=>{
+    for(const selected of [[],[1]]){
+      const ctx=make({focusWave:()=>{},api:async(path,body)=>({cues:body.cues,lines:[{text:'参考',index:0,cue_index:0}],
+        document:{text:'参考'},gaps:[],stats:{total:2,needs_review:0}})},['matchScript']);
+      ctx.selectCue=(i,seek,additive)=>{if(!additive)ctx.state.selectedCues=new Set([i]);};
+      ctx.state.settings.mode='align';ctx.state.script=[{text:'参考'}];
+      ctx.state.cues=[{text:'甲',start:0,end:1},{text:'乙',start:1,end:2}];ctx.state.selectedCues=new Set(selected);
+      assert(await ctx.matchScript(true));assert.deepEqual([...ctx.state.selectedCues],selected);
+    }
+  });
+  await test('two_status_slots_replace_pending_errors_and_passes_independently',async()=>{
+    const ctx=make({},['badgesHtml','filteredRows']);
+    const cue={text:'正常对白',start:0,end:1};
+    const check=(calibration,alignment)=>{
+      const html=ctx.badgesHtml(cue),statuses=ctx.cueStageStatuses(cue);
+      assert.equal(statuses.calibration.label,calibration);assert.equal(statuses.alignment.label,alignment);
+      assert.equal((html.match(/data-stage="calibration"/g)||[]).length,1);
+      assert.equal((html.match(/data-stage="alignment"/g)||[]).length,1);
+      assert(!html.includes('修改通过'));
+    };
+    check('尚未校准','尚未对齐');
+    cue.content_stage='calibrate';cue.reference_match={status:'typo',reference:{text:'正确对白'}};
+    check('疑似问题','尚未对齐');
+    cue.script_text=cue.text;cue.reference_match={status:'high',query_text:cue.text};check('校准通过','尚未对齐');
+    cue.alignment={engine:'fixture'};cue.verification_stage='align';check('校准通过','对齐通过');
+    cue.alignment_error='首字无法定位';check('校准通过','明显错误');
+    delete cue.alignment_error;cue.duration_trim={method:'speech_activity'};check('校准通过','疑似问题');
+    delete cue.duration_trim;cue.alignment.stale=true;check('校准通过','尚未对齐');
+    cue.alignment.stale=false;cue.script_text='';cue.reference_match={status:'unmatched'};check('明显错误','对齐通过');
+    ctx.state.cues=[cue];ctx.state.search='';ctx.state.filter='aligned';assert.equal(ctx.filteredRows().length,1);
+  });
+  await test('operation_markers_control_badges_and_manual_timing_never_calibrates_text',async()=>{
+    const ctx=make({},['badgesHtml']);const cue={text:'原句',start:1,end:2,script_text:'正句',reference_match:{status:'typo',reference:{text:'正句'}},alignment:{engine:'inherited'}};
+    assert.equal(ctx.cueStageStatuses(cue).calibration.label,'尚未校准');assert.equal(ctx.cueStageStatuses(cue).alignment.label,'尚未对齐');
+    cue.content_stage='verify';assert.equal(ctx.cueStageStatuses(cue).calibration.label,'疑似问题');assert.equal(ctx.cueTextClass(cue),'context-warning');
+    cue.reference_match={status:'high',query_text:cue.text};cue.script_text=cue.text;
+    assert.equal(ctx.cueStageStatuses(cue).calibration.label,'校验通过');
+    ctx.completeModification(cue);assert.equal(ctx.cueStageStatuses(cue).calibration.label,'校准通过');
+    cue.start=1.1;ctx.confirmCueTiming(cue);assert.equal(ctx.cueStageStatuses(cue).alignment.label,'对齐通过');assert.equal(ctx.cueTextClass(cue),'passed');
+    cue.text='改后不同';assert.equal(ctx.cueStageStatuses(cue).alignment.label,'尚未对齐');
+    assert(!ctx.badgesHtml({...cue,source:'split',width_split:true}).includes('已分段'));
+  });
+  await test('short_onset_warning_is_minor_and_manual_timing_confirmation_clears_it',async()=>{
+    const ctx=make({},['badgesHtml']);const cue={text:'不自量力',script_text:'不自量力',start:51.42,end:52.22,
+      content_stage:'calibrate',verification_stage:'align',alignment:{engine:'test'},alignment_warning:'VAD 未确认短首字，保留模型时间'};
+    assert.equal(ctx.cueStageStatuses(cue).calibration.label,'校准通过');
+    assert.equal(ctx.cueStageStatuses(cue).alignment.label,'疑似问题');
+    assert(!ctx.badgesHtml(cue).includes('明显错误'));
+    ctx.confirmCueTiming(cue);assert(!cue.alignment_warning);
+    assert.equal(ctx.cueStageStatuses(cue).alignment.label,'对齐通过');
+  });
+  await test('wave_wheel_defaults_zoom_without_modifier_and_pan_only_with_alt',async()=>{
+    let details=0,prevented=0;
+    const ctx=make({waveCanvas:{clientWidth:1000,getBoundingClientRect:()=>({left:0,width:1000})},
+      waveWindow:()=>({duration:100,start:20,span:10}),requestWaveDetail:()=>details++},['handleWaveWheel']);
+    ctx.state.waveStart=20;ctx.state.waveSpan=10;
+    const event={deltaX:0,deltaY:100,deltaMode:0,clientX:500,preventDefault:()=>prevented++};
+    ctx.handleWaveWheel({...event,altKey:true});assert.equal(ctx.state.waveStart,21);assert.equal(ctx.state.waveSpan,10);
+    ctx.handleWaveWheel(event);assert(ctx.state.waveSpan>10);assert(Math.abs(ctx.state.waveStart+ctx.state.waveSpan*.5-25)<1e-8);
+    const before=JSON.stringify([ctx.state.waveStart,ctx.state.waveSpan]);ctx.handleWaveWheel({...event,shiftKey:true});
+    assert.equal(JSON.stringify([ctx.state.waveStart,ctx.state.waveSpan]),before);
+    ctx.state.shortcuts={...ctx.defaultShortcuts(),waveZoom:'ctrl',wavePan:'shift'};
+    ctx.handleWaveWheel({...event,shiftKey:true,deltaY:-10000});assert.equal(ctx.state.waveStart,0);
+    assert.equal(details,3);assert.equal(prevented,3);
+    assert(ctx.matchesShortcut({key:'s',ctrlKey:true},'save'));
+    assert(!ctx.matchesShortcut({key:'s',ctrlKey:true,altKey:true},'save'));
+  });
+  await test('tag_filters_match_badges_and_leave_selection_and_export_scope_unchanged',async()=>{
+    const ctx=make({},['filteredRows','selectAllCues']);ctx.state.search='';
+    ctx.state.cues=[{text:'通过',start:0,end:1,verification_stage:'verify',reference_match:{status:'high',query_text:'通过'}},
+      {text:'错字',start:1,end:2,verification_stage:'verify',reference_match:{status:'typo',query_text:'错字',reference:{text:'正字'}}},
+      {text:'多识别',start:2,end:3,verification_stage:'verify',reference_match:{status:'unmatched',query_text:'多识别',reference:null}},
+      {text:'人工确认',start:3,end:4,edited:true,modification_complete:{text:'人工确认'}},
+      {text:'未校验',start:4,end:5}];
+    const before=JSON.stringify(ctx.state.cues);
+    for(const [filter,indices] of [['minor',[1]],['obvious',[2]],['calibrated',[]],['verified',[0,3]],['aligned',[]],['unchecked',[4]],['unaligned',[0,1,2,3,4]]]){
+      ctx.state.filter=filter;assert.deepEqual(Array.from(ctx.filteredRows(),row=>row.i),indices);
+    }
+    ctx.state.filter='obvious';ctx.selectAllCues(true);assert.equal(ctx.state.selectedCues.size,5);
+    assert.equal(JSON.stringify(ctx.state.cues),before);
+  });
+  await test('unverified_review_flags_filter_as_yellow_without_duplicate_badges',async()=>{
+    const ctx=make({},['badgesHtml','filteredRows']);ctx.state.search='';
+    const cue={text:'待试听对白',start:0,end:1,needs_review:true,estimated:true,confidence:.35,verification_stage:'verify',reference_match:{status:'typo',reference:{text:'待试听台词'}}};
+    ctx.state.cues=[cue];ctx.state.filter='minor';
+    assert.equal(ctx.filteredRows().length,1);
+    const html=ctx.badgesHtml(cue);
+    assert.equal((html.match(/badge low/g)||[]).length,1);
+    assert(html.includes('疑似问题'));assert(html.includes('原识别评分 35%'));
+    assert(!html.includes('时间估算'));assert(!html.includes('疑似噪音'));
+    ctx.state.cues=[{text:'',start:0,end:1,verification_stage:'calibrate'}];ctx.state.filter='obvious';
+    assert.equal(ctx.filteredRows().length,1);assert(ctx.badgesHtml(ctx.state.cues[0]).includes('明显错误'));
+  });
+  await test('parameter_violations_are_red_for_imported_and_manually_confirmed_text',async()=>{
+    const ctx=make({},['badgesHtml','filteredRows']);ctx.state.search='';ctx.state.filter='obvious';
+    const cue={text:'导入字幕超限',start:0,end:1,edited:true,modification_complete:{text:'导入字幕超限'}};
+    ctx.state.settings.width=3;ctx.state.cues=[cue];
+    assert.equal(ctx.filteredRows().length,1);assert(ctx.badgesHtml(cue).includes('明显错误'));
+    ctx.state.settings.width=20;ctx.state.settings.subtitleMin=2;
+    assert.equal(ctx.computeCueVerification(cue).label,'明显错误');
+    ctx.state.settings.subtitleMin=0;ctx.state.settings.subtitleMax=.5;
+    assert.equal(ctx.computeCueVerification(cue).label,'明显错误');
+    ctx.state.settings.subtitleMax=0;
+    assert.equal(ctx.computeCueVerification(cue).label,'修改通过');
+  });
+  await test('all_failed_alignment_never_reports_success_or_promotes_stage',async()=>{
+    let sound=0,message='';
+    const ctx=make({startAsr:async()=>({status:'done',info:{aligned_count:0,failed_count:1}}),
+      playSound:()=>sound++,toast:text=>message=text},['alignAndVerify']);
+    await ctx.alignAndVerify();
+    assert.equal(sound,0);assert(message.includes('没有字幕对齐成功'));
+    assert.equal(ctx.state.cues[0].verification_stage,undefined);
+  });
+  await test('manual_reference_can_be_written_without_overwriting_source_and_adopted_explicitly',async()=>{
+    const chinese={window:{},OpenCC:{Converter:()=>value=>value}};
+    vm.runInNewContext(readFileSync(new URL('../frontend/js/chinese.js',import.meta.url),'utf8'),chinese);
+    const ctx=make({window:chinese.window},['subtitleText','editableCueText','mergeEditedCueText','editCueReference','useCueReference']);
+    const cue={text:'原字幕',script_text:'原参考。',asr_original:{text:'原识别'},alignment:{engine:'test'},
+      reference_match:{reference:{text:'原参考。'}},words:[{word:'原字幕'}]};
+    ctx.editCueReference(cue,'你来了？等一等……');
+    assert.equal(cue.text,'原字幕');assert.equal(cue.script_text,'原参考。');
+    assert.equal(cue.reference_match.reference.text,'原参考。');
+    assert(ctx.useCueReference(cue));assert.equal(cue.text,'你来了？等一等……');
+    assert.equal(cue.asr_original.text,'原识别');assert(cue.alignment.stale);assert.equal(cue.words.length,0);
+  });
+  await test('recommended_settings_preserve_project_and_personal_options_and_obey_lock',async()=>{
+    let configWrites=0;
+    const ctx=make({normalizeSettings:()=>{},syncSettingsUI:()=>{},scheduleConfigSave:()=>configWrites++},['applyRecommendedSettings']);
+    Object.assign(ctx.state.settings,{model:'large-v3',sound:false,volume:25,arabicNumbers:true,keepPunc:false,subtitleTail:.8,keepInterjections:false});
+    const before=JSON.stringify(ctx.state.cues);
+    ctx.applyRecommendedSettings();
+    assert.equal(JSON.stringify(ctx.state.cues),before);
+    assert.equal(ctx.state.settings.model,'large-v3');assert.equal(ctx.state.settings.volume,25);
+    assert.equal(ctx.state.settings.sound,false);assert.equal(ctx.state.settings.arabicNumbers,true);
+    assert.equal(ctx.state.settings.vad,true);assert.equal(ctx.state.settings.keepPunc,true);
+    assert.equal(ctx.state.settings.keepInterjections,false);assert.equal(ctx.state.settings.subtitleTail,0);
+    assert.equal(configWrites,1);
+    ctx.state.jobId='running';ctx.state.settings.width=8;ctx.applyRecommendedSettings();
+    assert.equal(ctx.state.settings.width,8);assert.equal(configWrites,1);
+  });
+  await test('editing_with_punctuation_enabled_preserves_hidden_source_boundaries_and_typed_marks',async()=>{
+    const chinese={window:{},OpenCC:{Converter:()=>value=>value}};
+    vm.runInNewContext(readFileSync(new URL('../frontend/js/chinese.js',import.meta.url),'utf8'),chinese);
+    const ctx=make({window:chinese.window},['subtitleText','editableCueText','mergeEditedCueText']);
+    ctx.state.settings.keepPunc=true;
+    assert.equal(ctx.mergeEditedCueText('你好，世界。','您好世界'),'您好，世界。');
+    assert.equal(ctx.mergeEditedCueText('','你好，朋友！'),'你好，朋友！');
+    assert.equal(ctx.mergeEditedCueText('你好世界','你好，世界'),'你好，世界');
+    assert.equal(ctx.mergeEditedCueText('你好，世界。','你好世界啊'),'你好，世界啊。');
+  });
+  await test('merging_manual_reference_parts_retains_all_text_and_is_undoable',async()=>{
+    const ctx=make({},['doMerge']);
+    ctx.state.cues=[{text:'我们回家',start:0,end:1,manual_reference:'我们回家，'},
+      {text:'明天再见',start:1,end:2,manual_reference:'明天再见！'}];
+    const before=ctx.snapshot();ctx.state.selectedCues=new Set([0,1]);await ctx.doMerge();
+    assert.equal(ctx.state.cues[0].manual_reference,'我们回家，明天再见！');
+    assert.equal(ctx.state.history[0],before);
+  });
+  await test('media_picker_locks_conflicting_actions_until_cancel_or_selection',async()=>{
+    let release,loaded='';const requests=[];
+    const ctx=make({api:async path=>{requests.push(path);return new Promise(resolve=>release=resolve)},
+      loadMedia:async path=>{assert.equal(ctx.state.mediaPickerOpen,false);loaded=path;},
+      normalizeSettings:()=>{},syncSettingsUI:()=>{},scheduleConfigSave:()=>{}},['pickMedia','startAsr','applyRecommendedSettings']);
+    const first=ctx.pickMedia();assert(ctx.state.mediaPickerOpen);assert(ctx.editLocked());
+    ctx.state.settings.width=11;ctx.applyRecommendedSettings();assert.equal(ctx.state.settings.width,11);
+    assert.equal(await ctx.startAsr(),null);await ctx.pickMedia();assert.equal(requests.length,1);
+    release({path:'B.wav'});await first;assert.equal(loaded,'B.wav');assert(!ctx.editLocked());
+    const second=ctx.pickMedia();release({paths:[],path:''});await second;
+    assert(!ctx.editLocked());assert.equal(loaded,'B.wav');
+  });
+  await test('manual_reference_search_uses_current_visible_reference',async()=>{
+    const ctx=make({},['filteredRows']);ctx.state.filter='all';ctx.state.search='人工补写';
+    ctx.state.cues=[{text:'当前字幕',start:0,end:1,manual_reference:'人工补写的参考',script_text:'旧匹配文字'}];
+    assert.equal(ctx.filteredRows().length,1);
+    ctx.state.search='旧匹配';assert.equal(ctx.filteredRows().length,0);
+  });
+  await test('modified_cue_with_stale_alignment_keeps_content_pass_without_aligned_filter',async()=>{
+    const ctx=make({},['filteredRows','cueStatistics']);ctx.state.filter='aligned';ctx.state.search='';
+    const cue={text:'修改后的字幕',start:0,end:1,verification_stage:'align',alignment:{engine:'test',stale:true}};
+    ctx.completeModification(cue);ctx.state.cues=[cue];
+    assert.equal(ctx.cueStatistics(ctx.state.cues).aligned,0);
+    assert.equal(ctx.cueVerification(cue).kind,'modified');assert.equal(ctx.filteredRows().length,0);
+    ctx.state.filter='modified';assert.equal(ctx.filteredRows().length,1);
+  });
+  await test('alignment_stage_without_an_alignment_record_does_not_show_aligned',async()=>{
+    const ctx=make({},['cueStatistics']);
+    const cue={text:'已有字幕',start:0,end:1,verification_stage:'align'};
+    assert.equal(ctx.cueStatistics([cue]).aligned,0);
+    assert.notEqual(ctx.cueVerification(cue)?.kind,'aligned');
+    assert.equal(ctx.cueReportVerdict(cue),'unchecked');
+  });
+  await test('clearing_media_also_clears_reference_file_location',async()=>{
+    const ctx=make({video:{pause:()=>{},removeAttribute:()=>{},load:()=>{}},overlay:{textContent:''},
+      progressBar:{style:{}},clearInterval:()=>{},resetWaveDetail:()=>{},abortScriptUpload:()=>{}},['clearMedia']);
+    ctx.state.scriptPath='C:/old-reference.txt';
+    await ctx.clearMedia();assert.equal(ctx.state.scriptPath,'');assert.equal(ctx.state.script.length,0);
+  });
+  await test('restoring_imported_srt_restores_its_own_reference_location',async()=>{
+    const cues=[{text:'字幕',start:0,end:1}];
+    const ctx=make({File:class {},api:async path=>path==='/api/dialog'?{path:'B.srt'}:
+      path==='/api/srt/parse'?{cues}:{project:{cues,script_path:'B-reference.txt',script_lines:[]}}},['importSrt','restoredScriptNames']);
+    ctx.state.media=null;ctx.state.scriptPath='A-reference.txt';
+    await ctx.importSrt();assert.equal(ctx.state.scriptPath,'B-reference.txt');
   });
   return {total: results.length, all_passed: results.every(r => r.passed), results};
 }

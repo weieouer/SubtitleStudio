@@ -1,29 +1,64 @@
-# Python environments and generated files
-.venv/
-.venv.broken_*/
+# Python 本地环境与自动生成的缓存，下载源码后通过 main.py setup 重建
+/.venv/
+/.venv.broken_*/
 __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 
-# Portable release resources are prepared locally, not committed as source.
-runtime/
-wheels/
-dist/
-build/
-installer/build/
-PACKAGE_MANIFEST.json
+# 便携 Python、离线依赖及构建产物只在本机准备，安装包通过发行附件分发
+/runtime/
+/wheels/
+/dist/
+/build/
+/installer/build/
+/PACKAGE_MANIFEST.json
 
-# Models, engine environments, user media, projects, caches and logs
-data/
-config/dialog_dirs.json
-config/ui.json
+# 用户素材、工程、模型、引擎环境、下载缓存和运行日志，不随源码上传
+/data/
+/config/dialog_dirs.json
+/config/ui.json
+/config/*.lock
 
-# Local editor state and secrets
+# 自动生成的验证证据不上传；保留人工编写的 Markdown 说明
+/docs/修复验证/**
+!/docs/修复验证/**/
+!/docs/修复验证/**/*.md
+/docs/verification-*/
+
+# 历史清理快照和压缩包不属于运行源码；历史文字文档保留
+/docs/archive/**/*.zip
+/docs/archive/**/*.json
+
+# 依赖本机工程和素材路径的一次性诊断脚本；通用单元测试和页面测试保留
+/tests/diagnose_leading_effect.py
+/tests/check_release_install.py
+
+# 编辑器个人设置和操作系统生成文件
+/.vscode/
+/.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 本地凭据和环境变量；可供他人复制的示例配置允许提交
 .env
 .env.*
 !.env.example
-.vscode/*.local.json
+# 下载中间文件、调试日志、编辑备份和冲突残留
+*.log
 *.partial
+*.part
 *.tmp
+*.bak
+*.orig
+*.rej
+
+# 注意：已跟踪的文件仍会出现在提交中，需要另行从 Git 索引移除，本规则不删除本地文件。
+# backend/、frontend/（含图标等资源）、tests/ 通用测试、tools/、installer/ 源码均保留。
+# requirements*.txt、pyproject.toml、config/engines.json、config/firered.json 是必要配置，不要忽略。

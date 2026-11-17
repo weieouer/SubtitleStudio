@@ -1,4 +1,4 @@
-"""Whisper 幻觉字幕：确证条目自动不导出，疑似条目只提醒，文字和时间都保留。"""
+"""Whisper 幻觉字幕：只标记供人工复核，不自动排除；文字、时间和导出范围都保留。"""
 from pathlib import Path
 import sys
 import unittest
@@ -21,7 +21,7 @@ class HallucinationTests(unittest.TestCase):
         for item in cues:
             self.assertTrue(item['is_noise'])
             self.assertTrue(item['needs_review'])
-            self.assertTrue(item['exclude_export'])
+            self.assertFalse(item.get('exclude_export'))
             self.assertTrue(item['hallucination']['confirmed'])
             self.assertEqual(item['text'], item['text'].strip())
         self.assertIn('known-text', cues[0]['hallucination']['reasons'])
@@ -50,11 +50,12 @@ class HallucinationTests(unittest.TestCase):
         self.assertFalse(item.get('is_noise'))
         self.assertTrue(item['needs_review'])
 
-    def test_extreme_sparse_line_is_excluded_even_without_boilerplate(self):
+    def test_extreme_sparse_line_is_flagged_but_not_excluded(self):
         item = cue('肃经身啊', 727.7, 812.8)
         self.assertTrue(analyze(item)['confirmed'])
         self.assertEqual(mark([item]), [item])
-        self.assertTrue(item['exclude_export'])
+        self.assertFalse(item.get('exclude_export'))
+        self.assertTrue(item['is_noise'])
 
     def test_long_sparse_line_without_no_speech_is_not_confirmed(self):
         self.assertIsNone(analyze(cue('嗯', 0, 10)))
@@ -91,6 +92,15 @@ class HallucinationTests(unittest.TestCase):
         cues = [cue('我们走吧', 0, 1), cue('我们走吧', 1, 2)]
         self.assertEqual(mark(cues), [])
         self.assertFalse(any('hallucination' in item for item in cues))
+
+    def test_legacy_auto_exclusion_is_released_but_manual_non_export_stays(self):
+        auto = cue('请不吝点赞 订阅', 0, 54.17, exclude_export=True,
+                   hallucination={'confirmed': True, 'automatic_exclusion': True, 'reasons': ['known-text']})
+        manual = cue('手动不导出', 60, 61, exclude_export=True, review_decision='non_script')
+        mark([auto, manual])
+        self.assertFalse(auto['exclude_export'])
+        self.assertFalse(auto['hallucination']['automatic_exclusion'])
+        self.assertTrue(manual['exclude_export'])
 
     def test_original_text_and_times_are_preserved(self):
         item = cue('请不吝点赞 订阅 转发 打赏支持明镜与点点栏目', 0, 120)

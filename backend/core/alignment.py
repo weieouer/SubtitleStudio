@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from bisect import bisect_left
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -14,6 +15,7 @@ from rapidfuzz.distance import Levenshtein
 from .model_manager import runtime_python, weights_present, model_directory, ensure_runtime
 from .paths import RESULTS_DIR
 from .reference_match import normalized, _reference_boundaries
+from .alignment_quality import word_timing_issue
 
 
 def invalidate_alignment(cue, reason):
@@ -35,16 +37,25 @@ def apply_word_times(cues, indices, words, offset=0):
         query += normalized(cues[ci]['text'])[0]
         bounds.append(len(query))
     reference, times, word_ranges = '', [], []
+    # 一条词记录坏掉时只标记受影响的字幕，不能终止其他字幕的对齐。
+    words=[dict(word) for word in words]
     for word in words:
         text = normalized(word['text'])[0]
-        start, end = float(word['start']) + offset, float(word['end']) + offset
-        if end < start:
-            raise ValueError('对齐模型返回了无效词级时间')
+        try:
+            start, end = float(word['start']) + offset, float(word['end']) + offset
+            valid=math.isfinite(start) and math.isfinite(end) and start>=0 and end>start
+        except (TypeError,ValueError,KeyError):
+            valid=False
+        if not valid:
+            word['alignment_error']='对齐模型返回了无效词级时间'
+            start=end=0.
         word_ranges.append((len(reference),len(reference)+len(text)))
         reference += text
         times.extend((start + (end-start)*j/max(1,len(text)), start + (end-start)*(j+1)/max(1,len(text)), j > 0, j < len(text)-1) for j in range(len(text)))
     if not query or not reference or Levenshtein.normalized_similarity(query, reference) < .9:
-        raise ValueError('对齐模型返回文字与输入不一致，已保留当前字幕和时间')
+        for ci in indices:
+            invalidate_alignment(cues[ci],'对齐模型返回文字与输入不一致，已保留当前字幕和时间')
+        return cues
     # 等长替换可可靠映射时间，不能因为一个同音字就静默清空全部词。
     char_map=[None]*len(query)
     for tag,lo,hi,first,last in Levenshtein.opcodes(query,reference):
@@ -70,6 +81,11 @@ def apply_word_times(cues, indices, words, offset=0):
         if any(value is None for value in selected):
             invalidate_alignment(cue,'对齐返回文字有增删，无法可靠分配词时间，已保留输入时间')
             continue
+        uncertain = next((words[owners[value]].get('alignment_error') for value in selected
+                          if words[owners[value]].get('alignment_error')), None)
+        if uncertain:
+            invalidate_alignment(cue, uncertain+'，已保留输入时间，请试听复核')
+            continue
         mapped_words=[]
         k=0
         while k<len(positions):
@@ -82,6 +98,10 @@ def apply_word_times(cues, indices, words, offset=0):
         if not mapped_words or any(w['end']<=w['start'] for w in mapped_words):
             invalidate_alignment(cue,'对齐词时间不可用，已保留输入时间')
             continue
+        issue = word_timing_issue(mapped_words)
+        if issue:
+            invalidate_alignment(cue, issue+'，已保留输入时间，请试听复核')
+            continue
         input_span=float(cue['end'])-float(cue['start'])
         stretched=any(w['end']-w['start']>max(3.,len(w['word'])*.6+1.) for w in mapped_words)
         if (stretched and end-start>max(input_span*3,input_span+3.)
@@ -89,6 +109,7 @@ def apply_word_times(cues, indices, words, offset=0):
             invalidate_alignment(cue,'对齐结果异常拉长，已保留输入时间，请试听复核')
             continue
         cue.pop('alignment_error',None)
+        cue.pop('alignment_warning',None)
         cue.pop('word_timing_error',None)
         cue.setdefault('original_start',cue['start']); cue.setdefault('original_end',cue['end'])
         cue.setdefault('original_text',cue['text'])
@@ -119,6 +140,10 @@ def _resolve_overlaps(cues, input_times):
             previous, current = cues[index - 1], cues[index]
             if current['start'] >= previous['end'] - .001:
                 continue
+            if (previous.get('alignment_error') and current.get('alignment_error')
+                    and previous['start']+.02 < current['start']):
+                previous['end'] = current['start']
+                continue
             # 在重叠区中点切开，让两条首尾相接；前提是两边都还留有可显示时长。
             boundary = round((previous['end'] + current['start']) / 2, 3)
             if boundary > previous['start'] + .02 and boundary < current['end'] - .02:
@@ -127,6 +152,18 @@ def _resolve_overlaps(cues, input_times):
                 current['start'] = previous['end']
             invalidate_alignment(previous,'相邻对齐边界冲突，已调整时间，请复核')
             invalidate_alignment(current,'相邻对齐边界冲突，已调整时间，请复核')
+
+    # 失败条目的旧范围可能长达几分钟；不能让它把相邻成功句一起回退、拉长。
+    for index in range(1, len(cues)):
+        previous, current = cues[index-1], cues[index]
+        if previous['end'] <= current['start']:
+            continue
+        if previous.get('alignment_error') and not current.get('alignment_error'):
+            if previous['start'] + .02 < current['start']:
+                previous['end'] = current['start']
+        elif current.get('alignment_error') and not previous.get('alignment_error'):
+            if previous['end'] + .02 < current['end']:
+                current['start'] = previous['end']
 
     # 先处理顺序颠倒和跨度过大的错位；回退窗口包含前两条，因为坏边界常出在更前一条。
     for _ in range(4):
@@ -159,7 +196,7 @@ def _resolve_overlaps(cues, input_times):
     return cues
 
 
-def _alignment_windows(cues, audio, sample_rate=16000, max_span=230., context=2., cancel_event=None):
+def _alignment_windows(cues, audio, sample_rate=16000, max_span=230., context=2., cancel_event=None, preferred_span=30.):
     """按完整字幕组批，优先在持续低能量区切窗；无静音时保留重叠上下文。"""
     from .audio_boundaries import global_noise_floor
     from .asr import Cancelled
@@ -200,18 +237,20 @@ def _alignment_windows(cues, audio, sample_rate=16000, max_span=230., context=2.
     groups=[];first=0
     while first<len(cues):
         check()
+        # 短窗口减少短句匹配到远处相似音频；已有长字幕单独保留完整内容。
+        limit=min(max_span,max(preferred_span,float(cues[first]['end'])-float(cues[first]['start'])))
         last=first;covered=float(cues[first]['end']);prefix=[]
         while last<len(cues):
             cue=cues[last]
             if float(cue['end'])-float(cue['start'])>max_span:
                 raise ValueError('单条字幕过长，请先分段再对齐')
             end=max(covered,float(cue['end']))
-            if last>first and end-float(cues[first]['start'])>max_span:break
+            if last>first and end-float(cues[first]['start'])>limit:break
             covered=end;prefix.append(covered);last+=1
         # 临近容量上限时向前最多30秒找完整字幕间的静音，不切成大量短块。
         if last<len(cues):
             for boundary in range(last,first,-1):
-                if float(cues[boundary]['start'])<float(cues[first]['start'])+max(0,max_span-30):break
+                if float(cues[boundary]['start'])<float(cues[first]['start'])+max(0,limit-5):break
                 left=prefix[boundary-first-1];right=float(cues[boundary]['start'])
                 if quiet_cut(left,right,(left+right)/2) is not None:
                     last=boundary;break
@@ -264,7 +303,9 @@ def align_cues(path, cues, device, on_progress=None, cancel_event=None):
             with wave.open(str(filename),'wb') as output:
                 output.setnchannels(1); output.setsampwidth(2); output.setframerate(16000)
                 output.writeframes((np.clip(audio[round(start*16000):round(end*16000)],-1,1)*32767).astype('<i2').tobytes())
-            chunks.append({'path':str(filename),'text':'\n'.join(cues[i]['text'] for i in indices),'offset':start,'indices':indices})
+            chunks.append({'path':str(filename),'text':'\n'.join(cues[i]['text'] for i in indices),'offset':start,'indices':indices,
+                           'cues':[{'text':cues[i]['text'],'start':max(0.,float(cues[i]['start'])-start),
+                                    'end':min(end-start,float(cues[i]['end'])-start)} for i in indices]})
         request,result_path,progress=folder/'request.json',folder/'result.json',folder/'progress.json'
         request.write_text(json.dumps({'engine':'aligner','model':str(model_directory(name)),'device':device,'chunks':chunks},ensure_ascii=False),encoding='utf-8')
         log=folder/'engine.log'
@@ -282,7 +323,9 @@ def align_cues(path, cues, device, on_progress=None, cancel_event=None):
                     else:
                         import time
                         time.sleep(.3)
-                if process.returncode or not result_path.exists(): raise RuntimeError('强制对齐失败：'+log.read_text(encoding='utf-8',errors='replace')[-1200:])
+                if process.returncode or not result_path.exists():
+                    from .windows_runtime import engine_failure
+                    raise RuntimeError('强制对齐失败：'+engine_failure(log.read_text(encoding='utf-8',errors='replace')))
                 data=json.loads(result_path.read_text(encoding='utf-8'))
             finally:
                 if process.poll() is None: process.terminate(); process.wait(timeout=10)
@@ -294,6 +337,11 @@ def align_cues(path, cues, device, on_progress=None, cancel_event=None):
         result=refine_boundaries(result,audio,cancel_event=cancel_event)
         # 短字幕不该占很长的时间；音效或相邻声音会把边界拉长，用语音活动收紧。
         duration_repairs=cap_durations(result,audio,input_times=input_times,cancel_event=cancel_event)
+        # 失败项不能凭能量重定位后看起来像成功；也不能继续使用旧词时间拆句。
+        for i,cue in enumerate(result):
+            if cue.get('alignment_error'):
+                cue['start'],cue['end']=input_times[i]
+                invalidate_alignment(cue,cue['alignment_error'])
         # 对齐结果必须满足“不重叠、最多首尾相接”；校验前先归一化，避免一条坏时间拖垮整批。
         result=_resolve_overlaps(result,input_times)
         from .srt_io import validate_cues
@@ -304,7 +352,9 @@ def align_cues(path, cues, device, on_progress=None, cancel_event=None):
         if errors:
             raise ValueError('对齐时间校验未通过：'+'；'.join(errors[:3]))
         return result, {'duration':duration,'engine':'Qwen3-ForcedAligner-0.6B','boundary_refinement':'rms_spectral_flux_hysteresis',
+                         'aligned_count':len(result)-len(skipped),'failed_count':len(skipped),
                          'duration_repairs':duration_repairs,
+                         'local_retry':data.get('local_retry',{}),
                          'windowing':{'strategy':'cue_silence_context','count':len(windows),
                                       'windows':windows},
                          'skipped': skipped}

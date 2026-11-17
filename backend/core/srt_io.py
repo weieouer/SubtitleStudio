@@ -18,12 +18,16 @@ EXCLAM_TAIL = set("啊呀吧啦")
 
 
 def normalize_subtitle_punctuation(text: str) -> str:
-    """开启标点时保留原文全部标点；关闭时使用独立去标点函数。"""
-    return str(text or '').strip()
+    """仅保留语气标点；数字、单位和英文词内部符号不作为句读删除。"""
+    return _filter_punctuation(text, keep_emotion=True)
 
 
 def strip_subtitle_punctuation(text: str) -> str:
     """关闭“标点符号”时使用的去标点文本；保护数值、单位和英文词内部符号。"""
+    return _filter_punctuation(text, keep_emotion=False)
+
+
+def _filter_punctuation(text: str, *, keep_emotion: bool) -> str:
     text = str(text or '').strip()
     chars = []
     for i, char in enumerate(text):
@@ -33,7 +37,9 @@ def strip_subtitle_punctuation(text: str) -> str:
                     or (char in "-'’" and previous.isascii() and previous.isalnum()
                         and following.isascii() and following.isalnum()))
         unit = char in '%％‰' and previous.isdigit()
-        if (not unicodedata.category(char).startswith('P') or internal or unit) and char != '⋯':
+        ellipsis = char == '.' and (text[max(0, i-2):i+1] == '...' or text[max(0, i-1):i+2] == '...' or text[i:i+3] == '...')
+        emotion = keep_emotion and (char in '!?！？…⋯' or ellipsis)
+        if emotion or ((not unicodedata.category(char).startswith('P') or internal or unit) and char != '⋯'):
             chars.append(char)
     return re.sub(r'[ \t]{2,}', ' ', ''.join(chars)).strip()
 
@@ -176,9 +182,13 @@ def format_srt(cues: list[dict], *, add_punctuation: bool = False, with_role: bo
     ordered = sorted(cues, key=lambda c: (float(c.get("start", 0)), float(c.get("end", 0))))
     out: list[str] = []
     for i, cue in enumerate(ordered, 1):
-        start = float(cue.get("start", 0))
-        end = max(float(cue.get("end", start)), start + 0.001)
+        start_ms = round(max(0.,float(cue.get("start", 0))) * 1000)
+        end_ms = max(round(float(cue.get("end", start_ms/1000)) * 1000),start_ms+1)
+        start,end = start_ms/1000,end_ms/1000
         text = (cue.get("text") or "").strip()
+        # SRT空白行用于结束条目，不能把编辑框内的空段落原样写入而丢掉后文。
+        text = text.replace('\r\n','\n').replace('\r','\n')
+        text = '\n'.join(line for line in text.split('\n') if line.strip())
         if with_role and cue.get("role") and cue["role"] != "待确认":
             text = f"{cue['role']}：{text}"
         if add_punctuation:
@@ -212,6 +222,8 @@ def validate_cues(cues: list[dict], duration: float = 0) -> list[str]:
             errors.append(f"第 {i} 条开始时间为负数")
         if end <= start:
             errors.append(f"第 {i} 条结束时间必须晚于开始时间")
+        elif round(end*1000) <= round(start*1000):
+            errors.append(f"第 {i} 条在毫秒精度下时长不足，请调整到至少1毫秒")
         if duration and (start > duration + 0.001 or end > duration + 0.001):
             errors.append(f"第 {i} 条超出视频时长")
         if not isinstance(cue.get("text"), str) or not cue["text"].strip():
@@ -220,11 +232,12 @@ def validate_cues(cues: list[dict], duration: float = 0) -> list[str]:
              if isinstance(c, dict) and isinstance(c.get("start"), (int, float))
              and isinstance(c.get("end"), (int, float))
              and math.isfinite(c["start"]) and math.isfinite(c["end"])]
-    latest_end = -1.0
+    latest_end_ms = -1
     for start, end, i in sorted(valid):
-        if start < latest_end - 0.001:
+        start_ms,end_ms = round(start*1000),round(end*1000)
+        if start_ms < latest_end_ms:
             errors.append(f"第 {i} 条与前面字幕时间重叠，请调整后导出")
-        latest_end = max(latest_end, end)
+        latest_end_ms = max(latest_end_ms,end_ms)
     if len(errors) > 20:
         errors = errors[:20] + [f"……还有 {len(errors) - 20} 个问题"]
     return errors

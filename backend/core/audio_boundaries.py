@@ -95,6 +95,69 @@ def _run_overlap(onset, speech_end, word):
     return max(0., min(speech_end, float(word['end'])) - max(onset, float(word['start'])))
 
 
+def _edge_word_without_speech(probabilities, low, words, at_end=False):
+    """首尾词缺少人声、而句内相邻词有人声证据时，边界需要复核。"""
+    if probabilities is None or low is None or len(words)<2:
+        return False
+    first=words[-1] if at_end else words[0]
+    a,b=float(first['start']),float(first['end'])
+    if b-a<.05:
+        return False
+    # 只取完全落在首词内部的帧；轻声或边界不明确时保留原判断。
+    begin=max(0,int(np.ceil((a-low)/VAD_FRAME_SECONDS)))
+    finish=min(len(probabilities),int(np.floor((b-low)/VAD_FRAME_SECONDS)))
+    prefix=probabilities[begin:finish]
+    # 单帧高概率也可能来自敲击/爆音，不能凭它认定首词确实有人声。
+    # 持续的中等概率仍按轻声人声保护；这里只标记不可靠结果，不凭峰值裁字。
+    if len(prefix)<3 or _vad_region_ambiguous(probabilities,begin,finish):
+        return False
+    runs=[(low+x*VAD_FRAME_SECONDS,low+y*VAD_FRAME_SECONDS)
+          for x,y in _vad_runs(probabilities)]
+    if any(_run_overlap(x,y,first)>.02 for x,y in runs):
+        return False
+    # 句内真实词必须与持续人声重叠，单独的响声/纯音乐不能触发此判断。
+    context=words[:-1] if at_end else words[1:]
+    return any((y<=a-.08 if at_end else x>=b+.08)
+               and _run_overlap(x,y,word)>=min(.08,(float(word['end'])-float(word['start']))*.5)
+               for x,y in runs for word in context if float(word['end'])>float(word['start']))
+
+
+def _leading_word_without_speech(probabilities, low, words):
+    return _edge_word_without_speech(probabilities,low,words)
+
+
+def _trailing_word_without_speech(probabilities, low, words):
+    return _edge_word_without_speech(probabilities,low,words,at_end=True)
+
+
+def _compact_edge_word(words, at_end=False):
+    """短首尾词与句内词连贯时，VAD 漏检不足以推翻字词模型。"""
+    from .alignment_quality import plain
+    if len(words)<2:
+        return False
+    first,second=(words[-1],words[-2]) if at_end else words[:2]
+    span=float(first['end'])-float(first['start'])
+    gap=(float(first['start'])-float(second['end']) if at_end else
+         float(second['start'])-float(first['end']))
+    length=len(plain(first.get('word',first.get('text',''))))
+    return length>0 and .02<=span<=min(.8,max(.32,length*.25)) and -.001<=gap<=.16+.001
+
+
+def _compact_leading_word(words):
+    return _compact_edge_word(words)
+
+
+def _context_supports_edge(onset, speech_end, words, at_end=False):
+    """待采用的人声区间还需与句内相邻词相接，避免将孤立音效当成边界。"""
+    if len(words)<2:
+        return True
+    context=words[-2] if at_end else words[1]
+    if _run_overlap(onset,speech_end,context)>=.04:
+        return True
+    gap=onset-float(context['end']) if at_end else float(context['start'])-speech_end
+    return 0<=gap<=.16
+
+
 def _vad_start(audio, sample_rate, start, end, words, probabilities=None, low=None, max_span=3.0):
     """若第一个词之前是 VAD 明确判为非语音的声音，返回真正的语音起点。
 
@@ -127,6 +190,8 @@ def _vad_start(audio, sample_rate, start, end, words, probabilities=None, low=No
             continue                      # 该区间不对应首词，忽略
         if onset > float(words[0]['end']) - .05:
             continue                      # 该区间不对应首词，忽略
+        if not _context_supports_edge(onset,speech_end,words):
+            continue
         if overlap > best_overlap:
             best=onset;best_overlap=overlap
     return best - .02 if best is not None else None
@@ -160,6 +225,8 @@ def _vad_end(audio, sample_rate, start, end, words, probabilities=None, low=None
             continue                      # 该区间不对应尾词，忽略
         if speech_end < float(words[-1]['start']) + .05:
             continue                      # 该区间不对应尾词，忽略
+        if not _context_supports_edge(onset,speech_end,words,at_end=True):
+            continue
         if overlap > best_overlap:
             # VAD 的尾部常会多吞 0.1–0.4 秒音效；最后一个词的结束时间
             # 是更可靠的锚点，最多允许再留 150 ms 尾音。
@@ -434,6 +501,23 @@ def refine_boundaries(cues,audio,sample_rate=16000,max_shift=.18,cancel_event=No
         # 任何不确定、模型缺失或会裁掉整词的情况都保留原时间。
         if words:
             vad_low,vad_frames=_vad_region(audio,sample_rate,start,end)
+            if cue.get('alignment'):
+                warnings=[];errors=[]
+                for at_end,name,context in ((False,'首字','后续'),(True,'尾字','前面')):
+                    if not _edge_word_without_speech(vad_frames,vad_low,words,at_end):
+                        continue
+                    if _compact_edge_word(words,at_end):
+                        warnings.append(f'VAD 未确认短{name}，但{context}字词时间连贯；已保留字词模型时间，请试听复核')
+                    else:
+                        errors.append(f'{name}落在非人声区域，可能被音效吸附；已保留原时间，请试听复核')
+                    cue['needs_review']=True
+                if warnings:
+                    cue['alignment_warning']='；'.join(warnings)
+                if errors:
+                    cue['alignment_error']='；'.join(errors)
+                if vad_frames is None or not _vad_runs(vad_frames):
+                    cue['alignment_warning']='未取得可靠的人声首尾边界，保留字词模型时间，请试听复核'
+                    cue['needs_review']=True
             vad_start=_vad_start(audio,sample_rate,start,end,words,vad_frames,vad_low)
             vad_end=_vad_end(audio,sample_rate,start,end,words,vad_frames,vad_low)
             # 只做收紧、不做扩张：VAD 证据不足或把音效误判成人声时，

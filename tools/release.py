@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import subprocess
-import json
 from pathlib import Path
 
 from .development import process_environment, validate_environment
@@ -17,13 +16,10 @@ def build_installer(output: Path, environment: Path, *, iscc: Path | None = None
     executable = output / f'SubtitleStudio-Setup-{app_version()}-x64-full.exe'
     if not stage_only and executable.exists():
         raise FileExistsError(f'安装包已存在，请指定其他输出目录：{executable}')
-    prepared = ROOT / 'installer/build/prepared-runtime/manifest.json'
-    from .prepare_runtime import runtime_key
-    try:
-        ready = json.loads(prepared.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        ready = {}
-    if not (ready.get('ready') and ready.get('torch_flavor') == 'cpu' and ready.get('dependency_sha256') == runtime_key()):
+    from .prepare_runtime import prepared_runtime
+    status = prepared_runtime(ROOT / 'installer/build/prepared-runtime')
+    if not status['ready']:
+        print('运行库需要重新准备：' + status['reason'], flush=True)
         subprocess.run([str(python), str(ROOT / 'tools/prepare_runtime.py')], cwd=ROOT,
                        env=process_environment(environment), check=True)
     command = [str(python), str(ROOT / 'installer/build_installer.py'), '--full', '--output', str(output)]

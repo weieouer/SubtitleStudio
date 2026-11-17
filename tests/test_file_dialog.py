@@ -13,6 +13,56 @@ from core import file_dialog
 
 @unittest.skipUnless(os.name == 'nt', 'Windows 原生选择框')
 class FileDialogTests(unittest.TestCase):
+    def test_file_dialog_hook_raises_full_dialog_after_initialization(self):
+        user, common = MagicMock(), MagicMock()
+        owner, child, dialog = 0x100000123, 0x100000456, 0x100000789
+        user.CreateWindowExW.return_value=owner
+        user.GetParent.return_value=dialog
+        user.SetForegroundWindow.return_value=False  # Windows拒绝焦点时仍设置Z序。
+        common.CommDlgExtendedError.return_value=0
+        def select(pointer):
+            options=ctypes.cast(pointer,ctypes.POINTER(file_dialog.OpenFileName)).contents
+            self.assertEqual(options.hwndOwner,owner)
+            self.assertTrue(options.Flags & 0x20)
+            hook=ctypes.cast(options.lpfnHook,file_dialog.OpenFileHook)
+            self.assertEqual(hook(child,file_dialog.WM_INITDIALOG,0,0),0)
+            notice=file_dialog.NotificationHeader(hwndFrom=dialog,code=file_dialog.CDN_INITDONE)
+            self.assertEqual(hook(child,file_dialog.WM_NOTIFY,0,ctypes.addressof(notice)),0)
+            self.assertEqual(user.SetWindowPos.call_count,2)
+            for call in user.SetWindowPos.call_args_list:
+                self.assertEqual(call.args,(dialog,-1,0,0,0,0,0x43))
+            self.assertEqual(user.SetForegroundWindow.call_count,2)
+            user.SetForegroundWindow.assert_called_with(dialog)
+            notice.code=123
+            hook(child,file_dialog.WM_NOTIFY,0,ctypes.addressof(notice))
+            hook(child,file_dialog.WM_NOTIFY,0,0)
+            hook(child,0x111,0,0)
+            self.assertEqual(user.SetWindowPos.call_count,2,'不能在普通消息中持续抢前台')
+            return False
+        common.GetOpenFileNameW.side_effect=select
+        with patch.object(ctypes,'WinDLL',side_effect=[user,common]):
+            self.assertEqual(file_dialog.windows_dialog({'kind':'media'}),[])
+        user.DestroyWindow.assert_called_once_with(owner)
+
+    def test_directory_is_raised_even_without_initial_folder_and_cancel_releases_owner(self):
+        user,shell,ole=MagicMock(),MagicMock(),MagicMock()
+        user.CreateWindowExW.return_value=123
+        def browse(pointer):
+            info=ctypes.cast(pointer,ctypes.POINTER(file_dialog.BrowseInfo)).contents
+            self.assertEqual(info.hwndOwner,123)
+            callback=ctypes.cast(info.lpfn,file_dialog.BrowseCallback)
+            callback(456,file_dialog.BFFM_INITIALIZED,0,0)
+            user.SetWindowPos.assert_called_once_with(456,-1,0,0,0,0,0x43)
+            user.SetForegroundWindow.assert_called_once_with(456)
+            user.SendMessageW.assert_not_called()
+            return None
+        shell.SHBrowseForFolderW.side_effect=browse
+        with patch.object(ctypes,'WinDLL',side_effect=[user,shell]),patch.object(ctypes,'OleDLL',return_value=ole):
+            self.assertEqual(file_dialog.windows_dialog({'kind':'dir'}),[])
+        user.DestroyWindow.assert_called_once_with(123)
+        ole.CoUninitialize.assert_called_once()
+        ole.CoTaskMemFree.assert_not_called()
+
     def run_dialog(self, raw='', error=0, initial_dir='', expect_initial=None):
         user, common = MagicMock(), MagicMock()
         user.CreateWindowExW.return_value = 123

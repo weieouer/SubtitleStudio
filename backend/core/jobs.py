@@ -185,7 +185,7 @@ class JobManager:
                 if job.task in ('asr', 'asr_region'):
                     # 关闭“语气词”时，下方在提取结果里直接删除整条语气词；
                     # 开启时保留并写 interjection 标记，校准按可靠参考再确认。
-                    # 全文检测 Whisper 幻觉（片尾口播等）：标记并默认不导出，不删除字幕。
+                    # 幻觉特征只标记供人工复核，不自动排除或删除。
                     flagged = mark_hallucination(cues)
                     if flagged:
                         info['hallucination'] = {'count': len(flagged),

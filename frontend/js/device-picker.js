@@ -6,7 +6,9 @@
   function placePickerMenu(button, menu, minWidth = 0) {
     if (!button || !menu || menu.hidden) return;
     const margin = 8;
-    menu.style.width = 'auto';
+    // 选项菜单按内容取宽；auto 会被 grid 的 1fr 压缩导致“NVIDIA GPU”“快速 · 384”换行。
+    // 模型菜单有固定最小宽度和等宽行，继续按按钮宽度测量。
+    menu.style.width = minWidth ? 'auto' : 'max-content';
     menu.style.maxHeight = 'none';
     const natural = menu.scrollWidth;
     const box = button.getBoundingClientRect();
@@ -21,7 +23,8 @@
     const openUp = naturalHeight > spaceBelow && spaceAbove > spaceBelow;
     const available = openUp ? spaceAbove : spaceBelow;
     const height = Math.max(72, Math.min(naturalHeight, available));
-    menu.style.maxHeight = height + 'px';
+    // 边框不计入 scrollHeight，补 2px 避免全部选项已放下时仍出现滚动条。
+    menu.style.maxHeight = (height + 2) + 'px';
     const top = openUp
       ? Math.max(margin, box.top - height - 4)
       : Math.min(box.bottom + 4, innerHeight - height - margin);
@@ -51,7 +54,7 @@
     if (select.dataset.tip) button.dataset.tip = select.dataset.tip;
 
     function position() {
-      placePickerMenu(button, menu, 0);
+      placePickerMenu(button, menu, select.id === 'deviceSelect' ? 300 : 0);
     }
     function close(restoreFocus = false) {
       menu.hidden = true;
@@ -61,20 +64,11 @@
     function sync() {
       const selected = select.selectedOptions[0];
       const span = button.querySelector('span');
-      span.textContent = selected?.textContent || '';
-      // “设备”说明跟在当前选项后面（如“自动  当前为 CPU 环境 · 约 2.9 GB”），
-      // 不单独占一行，切换选项时高度不变。
+      span.textContent = selected?.dataset.buttonLabel || selected?.textContent || '';
       if (select.id === 'deviceSelect') {
         const state = document.querySelector('#gpuState');
-        const note = document.querySelector('#gpuStateText');
-        if (state && note && !state.hidden && note.textContent) {
-          const suffix = document.createElement('small');
-          suffix.className = 'device-note ' + (state.className.match(/\b(ready|failed)\b/)?.[1] || '');
-          // 紧跟“自动”时省略重复的“当前为”，给窄栏留出完整的环境与体积。
-          suffix.textContent = note.textContent.replace(/^当前为\s*/, '');
-          span.append(suffix);
-          if (state.dataset.tip) button.dataset.tip = state.dataset.tip;
-        }
+        if (state && !state.hidden && state.dataset.tip) button.dataset.tip = state.dataset.tip;
+        else button.removeAttribute('data-tip');
       }
       button.disabled = select.disabled;
       for (const option of menu.querySelectorAll('[data-value]')) {
@@ -86,13 +80,19 @@
     function syncGpu() {
       // Mirror the GPU action button so the device menu shows it after the
       // "GPU (CUDA)" name, exactly like the model menus.
-      const removal = select.id==='removalDevice';
-      const source = document.querySelector(removal?'#removalInstall':'#gpuDownload');
+      const source = document.querySelector('#gpuDownload');
       if (!source) return;
       const box = document.querySelector('#gpuState');
-      const gone = !removal && (source.hidden || (box && box.hidden));
+      const gone = source.hidden || (box && box.hidden);
+      const ready = box && !box.hidden && box.classList.contains('ready');
+      const note = document.querySelector('#gpuStateText');
+      for (const description of menu.querySelectorAll('[data-device-description="cuda"]')) {
+        description.textContent = box && !box.hidden && note?.textContent
+          ? note.textContent.replace(/^当前为\s*/, '') : '使用 NVIDIA GPU 加速';
+      }
+      for (const status of menu.querySelectorAll('[data-gpu-ready]')) status.hidden = !ready;
       for (const action of menu.querySelectorAll('[data-gpu]')) {
-        action.textContent = removal?'一键配置 GPU':source.textContent || '下载 GPU 环境';
+        action.textContent = source.textContent || '下载 GPU 环境';
         action.disabled = source.disabled;
         action.hidden = gone;
         if (source.dataset.tip) action.dataset.tip = source.dataset.tip;
@@ -107,17 +107,31 @@
         const item = document.createElement('button');
         item.type = 'button'; item.className = 'model-option';
         item.setAttribute('role', 'option'); item.tabIndex = -1;
-        item.dataset.value = option.value; item.textContent = option.textContent;
+        item.dataset.value = option.value;
+        if (select.id === 'deviceSelect') {
+          const name = document.createElement('span');
+          name.className = 'model-name'; name.textContent = option.textContent;
+          const description = document.createElement('small');
+          description.className = 'model-desc';
+          description.dataset.deviceDescription = option.value;
+          description.textContent = option.value === 'auto' ? '优先使用可用 GPU，否则使用 CPU'
+            : option.value === 'cpu' ? '使用 CPU 运行' : '使用 NVIDIA GPU 加速';
+          item.append(name, description);
+        } else item.textContent = option.textContent;
         item.disabled = option.disabled;
         row.append(item);
-        if (option.value === 'cuda' && ['deviceSelect','removalDevice'].includes(select.id)) {
+        if (option.value === 'cuda' && select.id === 'deviceSelect') {
           row.classList.add('gpu-choice');
           const gpu = document.createElement('button');
           gpu.type = 'button';
-          gpu.className = 'gpu-download picker-gpu';
+          gpu.className = 'gpu-download model-download picker-gpu';
           gpu.dataset.gpu = '1';
           gpu.textContent = '下载 GPU 环境';
           row.append(gpu);
+          const ready = document.createElement('span');
+          ready.className = 'model-ready is-ready gpu-ready';
+          ready.dataset.gpuReady = '1'; ready.textContent = '已就绪'; ready.hidden = true;
+          row.append(ready);
         }
         return row;
       }));
@@ -131,10 +145,7 @@
     menu.addEventListener('click', event => {
       const gpuAction = event.target.closest('[data-gpu]');
       if (gpuAction) {
-        if (!gpuAction.disabled) {
-          if(select.id==='removalDevice')window.SubtitleRemoval?.prepareGpu();
-          else document.querySelector('#gpuDownload')?.click();
-        }
+        if (!gpuAction.disabled) document.querySelector('#gpuDownload')?.click();
         return;
       }
       const item = event.target.closest('[data-value]');
@@ -194,9 +205,6 @@
     attach(document.querySelector('#deviceSelect'), 'device-picker'),
     attach(document.querySelector('#filterSelect'), 'filter-picker'),
     attach(document.querySelector('#exportFormat'), 'export-format-picker'),
-    attach(document.querySelector('#removalDevice'), 'device-picker'),
-    attach(document.querySelector('#removalQuality'), 'quality-picker'),
-    attach(document.querySelector('#removalFormat'), 'export-format-picker'),
   ];
   window.SubtitleDevicePicker = { sync: () => pickers[0]?.sync() };
   window.SubtitlePickers = { syncAll: () => pickers.forEach(picker => picker?.sync()) };

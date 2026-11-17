@@ -1,43 +1,0 @@
-Pretrained flow completion model has loaded...
-Pretrained ProPainter has loaded...
-Network [InpaintGenerator] was created. Total number of parameters: 39.4 million. To see the architecture, do print(network).
-
-Processing: frames [20 frames]...
-  0%|          | 0/7 [00:00<?, ?it/s] 14%|¨€¨…        | 1/7 [00:02<00:16,  2.72s/it] 29%|¨€¨€¨‚       | 2/7 [00:07<00:18,  3.73s/it] 43%|¨€¨€¨€¨€¨†     | 3/7 [00:11<00:16,  4.08s/it] 57%|¨€¨€¨€¨€¨€¨ƒ    | 4/7 [00:16<00:13,  4.34s/it] 71%|¨€¨€¨€¨€¨€¨€¨€¨‡  | 5/7 [00:20<00:08,  4.25s/it] 86%|¨€¨€¨€¨€¨€¨€¨€¨€¨„ | 6/7 [00:25<00:04,  4.37s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:28<00:00,  4.08s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:28<00:00,  4.08s/it]
-
-All results are saved in C:\Users\Ouer\AppData\Local\Temp\removal_preview\512\window-uw48nsj7\results\frames
-
-Processing: frames [20 frames]...
-  0%|          | 0/7 [00:00<?, ?it/s] 14%|¨€¨…        | 1/7 [00:03<00:19,  3.22s/it] 29%|¨€¨€¨‚       | 2/7 [00:07<00:20,  4.02s/it] 43%|¨€¨€¨€¨€¨†     | 3/7 [00:12<00:17,  4.38s/it] 57%|¨€¨€¨€¨€¨€¨ƒ    | 4/7 [00:17<00:13,  4.54s/it] 71%|¨€¨€¨€¨€¨€¨€¨€¨‡  | 5/7 [00:21<00:08,  4.36s/it] 86%|¨€¨€¨€¨€¨€¨€¨€¨€¨„ | 6/7 [00:26<00:04,  4.47s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:29<00:00,  4.19s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:29<00:00,  4.25s/it]
-
-All results are saved in C:\Users\Ouer\AppData\Local\Temp\removal_preview\512\window-7oyf7gm8\results\frames
-
-Processing: frames [20 frames]...
-  0%|          | 0/7 [00:00<?, ?it/s] 14%|¨€¨…        | 1/7 [00:02<00:16,  2.76s/it] 29%|¨€¨€¨‚       | 2/7 [00:07<00:18,  3.65s/it] 43%|¨€¨€¨€¨€¨†     | 3/7 [00:11<00:16,  4.09s/it] 57%|¨€¨€¨€¨€¨€¨ƒ    | 4/7 [00:16<00:13,  4.40s/it] 71%|¨€¨€¨€¨€¨€¨€¨€¨‡  | 5/7 [00:20<00:08,  4.28s/it] 86%|¨€¨€¨€¨€¨€¨€¨€¨€¨„ | 6/7 [00:24<00:04,  4.33s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:28<00:00,  4.04s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:28<00:00,  4.06s/it]
-
-All results are saved in C:\Users\Ouer\AppData\Local\Temp\removal_preview\512\window-8_1xdcsp\results\frames
-
-Processing: frames [20 frames]...
-  0%|          | 0/7 [00:00<?, ?it/s] 14%|¨€¨…        | 1/7 [00:02<00:17,  2.98s/it] 29%|¨€¨€¨‚       | 2/7 [00:07<00:18,  3.79s/it] 43%|¨€¨€¨€¨€¨†     | 3/7 [00:11<00:16,  4.16s/it] 57%|¨€¨€¨€¨€¨€¨ƒ    | 4/7 [00:16<00:13,  4.37s/it] 71%|¨€¨€¨€¨€¨€¨€¨€¨‡  | 5/7 [00:20<00:08,  4.12s/it] 86%|¨€¨€¨€¨€¨€¨€¨€¨€¨„ | 6/7 [00:24<00:04,  4.00s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:26<00:00,  3.61s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:26<00:00,  3.84s/it]
-
-All results are saved in C:\Users\Ouer\AppData\Local\Temp\removal_preview\512\window-xgrw69ty\results\frames
-
-Processing: frames [19 frames]...
-  0%|          | 0/7 [00:00<?, ?it/s] 14%|¨€¨…        | 1/7 [00:02<00:15,  2.50s/it] 29%|¨€¨€¨‚       | 2/7 [00:06<00:15,  3.13s/it] 43%|¨€¨€¨€¨€¨†     | 3/7 [00:10<00:14,  3.53s/it] 57%|¨€¨€¨€¨€¨€¨ƒ    | 4/7 [00:13<00:11,  3.67s/it] 71%|¨€¨€¨€¨€¨€¨€¨€¨‡  | 5/7 [00:17<00:07,  3.67s/it] 86%|¨€¨€¨€¨€¨€¨€¨€¨€¨„ | 6/7 [00:21<00:03,  3.80s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:24<00:00,  3.37s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:24<00:00,  3.45s/it]
-
-All results are saved in C:\Users\Ouer\AppData\Local\Temp\removal_preview\512\window-lt2ifz6t\results\frames
-
-Processing: frames [7 frames]...
-  0%|          | 0/3 [00:00<?, ?it/s] 33%|¨€¨€¨€¨†      | 1/3 [00:01<00:03,  1.89s/it] 67%|¨€¨€¨€¨€¨€¨€¨ƒ   | 2/3 [00:05<00:02,  2.65s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 3/3 [00:07<00:00,  2.32s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 3/3 [00:07<00:00,  2.33s/it]
-
-All results are saved in C:\Users\Ouer\AppData\Local\Temp\removal_preview\512\window-5waf5_6c\results\frames
-
-Processing: frames [13 frames]...
-  0%|          | 0/5 [00:00<?, ?it/s] 20%|¨€¨€        | 1/5 [00:02<00:08,  2.19s/it] 40%|¨€¨€¨€¨€      | 2/5 [00:05<00:08,  2.91s/it] 60%|¨€¨€¨€¨€¨€¨€    | 3/5 [00:09<00:06,  3.15s/it] 80%|¨€¨€¨€¨€¨€¨€¨€¨€  | 4/5 [00:12<00:03,  3.45s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 5/5 [00:15<00:00,  3.08s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 5/5 [00:15<00:00,  3.07s/it]
-
-All results are saved in C:\Users\Ouer\AppData\Local\Temp\removal_preview\512\window-bvsf0fi8\results\frames
-
-Processing: frames [20 frames]...
-  0%|          | 0/7 [00:00<?, ?it/s] 14%|¨€¨…        | 1/7 [00:02<00:15,  2.62s/it] 29%|¨€¨€¨‚       | 2/7 [00:06<00:16,  3.33s/it] 43%|¨€¨€¨€¨€¨†     | 3/7 [00:10<00:14,  3.56s/it] 57%|¨€¨€¨€¨€¨€¨ƒ    | 4/7 [00:14<00:11,  3.69s/it] 71%|¨€¨€¨€¨€¨€¨€¨€¨‡  | 5/7 [00:18<00:07,  3.74s/it] 86%|¨€¨€¨€¨€¨€¨€¨€¨€¨„ | 6/7 [00:21<00:03,  3.73s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:24<00:00,  3.43s/it]100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 7/7 [00:24<00:00,  3.50s/it]
-
-All results are saved in C:\Users\Ouer\AppData\Local\Temp\removal_preview\512\window-f5e1sksi\results\frames

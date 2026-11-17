@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -16,6 +17,19 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 DESTINATION = ROOT / 'installer/build/prepared-runtime'
+# 构建配方变化时必须让旧运行库失效；修改本脚本或下面的配置文件时同步递增。
+RECIPE_VERSION = 6
+LAYOUT = ('python/python.exe', 'python/pythonw.exe', 'ml/python.exe',
+          'ml/Lib/site-packages/torch/__init__.py',
+          'ml/Lib/site-packages/qwen_asr/__init__.py',
+          'ml/Lib/site-packages/fireredasr2s/fireredasr2/__init__.py')
+
+# 独立 Python 和推理 Python 都必须带齐 CRT，不能让系统安装掩盖漏包。
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from backend.core.windows_runtime import VC_DLLS
+from tools.prepare_vc_runtime import copy_crt
+LAYOUT += tuple(f'{environment}/{name}' for environment in ('python', 'ml') for name in VC_DLLS)
 
 
 def clean_environment():
@@ -26,11 +40,60 @@ def clean_environment():
     return result
 
 
-def runtime_key():
+def _python_identity():
+    """把便携 Python 的版本和架构计入配方，换解释器后不能复用旧站包。"""
+    executable = ROOT / 'runtime/python/python.exe'
+    if not executable.is_file():
+        return 'missing'
+    try:
+        result = subprocess.run(
+            [str(executable), '-I', '-c', 'import sys,platform;print(sys.version.split()[0],platform.machine())'],
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=20)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return f'unknown-{executable.stat().st_size}'
+
+
+def runtime_key(cuda=False):
+    """配方指纹覆盖脚本、锁文件、引擎配置、SDK 固定版本与解释器身份。"""
     digest = hashlib.sha256()
-    for name in ('requirements-lock.txt', 'config/removal.json', 'config/engines.json'):
-        digest.update((ROOT / name).read_bytes())
+    digest.update(f'recipe={RECIPE_VERSION}\ntorch={"cuda" if cuda else "cpu"}\n'.encode())
+    digest.update(Path(__file__).read_bytes())
+    digest.update((Path(__file__).with_name('prepare_vc_runtime.py')).read_bytes())
+    digest.update((Path(__file__).resolve().parents[1] / 'backend/core/windows_runtime.py').read_bytes())
+    for name in ('requirements-lock.txt', 'config/engines.json', 'config/firered.json'):
+        path = ROOT / name
+        if path.is_file():
+            digest.update(name.encode() + b'\n' + path.read_bytes() + b'\n')
+    digest.update(_python_identity().encode())
+    for environment in ('.venv','data/engines/qwen'):
+        for metadata in sorted((ROOT/environment/'Lib/site-packages').glob('*.dist-info/METADATA')):
+            digest.update(metadata.relative_to(ROOT).as_posix().encode()+b'\0'+metadata.read_bytes()+b'\0')
     return digest.hexdigest()
+
+
+def prepared_runtime(base=None):
+    """复用前统一校验清单、配方指纹和关键文件，缺失时返回可读原因。"""
+    base = Path(base or DESTINATION)
+    try:
+        info = json.loads((base / 'manifest.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {'ready': False, 'reason': '缺少运行库清单', 'manifest': {}}
+    if not isinstance(info,dict) or info.get('format') not in (1,2):
+        return {'ready':False,'reason':'运行库清单格式不受支持','manifest':{}}
+    if info.get('ready') is not True:
+        return {'ready': False, 'reason': '运行库上次准备未完成', 'manifest': info}
+    missing = [name for name in LAYOUT if not (base / name).is_file()]
+    if missing:
+        return {'ready': False, 'reason': '运行库缺少关键文件：' + '、'.join(missing), 'manifest': info}
+    cuda = info.get('torch_flavor') == 'cuda'
+    if info.get('torch_flavor') not in ('cpu', 'cuda'):
+        return {'ready': False, 'reason': '运行库未记录 CPU/CUDA 类型', 'manifest': info}
+    if info.get('dependency_sha256') != runtime_key(cuda):
+        return {'ready': False, 'reason': '运行库与当前构建配方不一致，需要重新准备', 'manifest': info}
+    return {'ready': True, 'reason': '', 'manifest': info}
 
 
 def run(python, *arguments):
@@ -47,6 +110,7 @@ def clone_python(target):
             raise ValueError('只能重建本次打包专用的运行环境目录')
         shutil.rmtree(resolved)
     shutil.copytree(base, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    copy_crt(target)
     return target / 'python.exe'
 
 
@@ -145,19 +209,32 @@ def local_cached_wheels(packages):
     return [found.get(package.split('==')[0].lower().replace('_','-'), package) for package in packages]
 
 
+def firered_revision():
+    """优先使用版本控制的固定提交；旧构建机缓存和远端 main 仅作兼容回退。"""
+    pinned = ROOT / 'config/firered.json'
+    if pinned.is_file():
+        revision = str(json.loads(pinned.read_text(encoding='utf-8')).get('revision', ''))
+        if not re.fullmatch(r'[0-9a-f]{40}', revision):
+            raise RuntimeError('config/firered.json 的 revision 必须是完整的 40 位提交号')
+        return revision
+    cache = ROOT / 'data/cache/runtime-build'
+    cache.mkdir(parents=True, exist_ok=True)
+    cached = cache / 'firered-revision.json'
+    if cached.exists():
+        return json.loads(cached.read_text(encoding='utf-8'))['revision']
+    metadata = cache / 'firered-revision.download.json'
+    download('https://api.github.com/repos/FireRedTeam/FireRedASR2S/commits/main', metadata)
+    revision = json.loads(metadata.read_text(encoding='utf-8'))['sha']
+    metadata.unlink(missing_ok=True)
+    cached.write_text(json.dumps({'revision': revision}), encoding='utf-8')
+    return revision
+
+
 def firered_source(target):
     """官方仓库没有安装元数据，固定提交后显式打包 SDK，不能 pip install 仓库 ZIP。"""
     cache = ROOT / 'data/cache/runtime-build'
     cache.mkdir(parents=True, exist_ok=True)
-    pinned = cache / 'firered-revision.json'
-    if pinned.exists():
-        revision = json.loads(pinned.read_text(encoding='utf-8'))['revision']
-    else:
-        metadata = cache / 'firered-revision.download.json'
-        download('https://api.github.com/repos/FireRedTeam/FireRedASR2S/commits/main', metadata)
-        revision = json.loads(metadata.read_text(encoding='utf-8'))['sha']
-        metadata.unlink(missing_ok=True)
-        pinned.write_text(json.dumps({'revision': revision}), encoding='utf-8')
+    revision = firered_revision()
     archive = cache / f'firered-{revision}.zip'
     if not archive.exists():
         download(f'https://codeload.github.com/FireRedTeam/FireRedASR2S/zip/{revision}', archive)
@@ -182,6 +259,29 @@ def firered_source(target):
     return {'revision': revision, 'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest()}
 
 
+def freeze(python):
+    """记录实际装入的包，便于排查“锁文件相同但站包不同”的机器差异。"""
+    result = subprocess.run([str(python), '-I', '-m', 'pip', 'freeze'], cwd=ROOT, env=clean_environment(),
+                            capture_output=True, text=True, encoding='utf-8', errors='replace')
+    return [line.strip() for line in (result.stdout or '').splitlines() if line.strip()] if result.returncode == 0 else []
+
+
+def defer_japanese_tokenizer(python):
+    """中文对齐不初始化日语 DyNet 模型，避免其原生加载器不支持中文安装路径。"""
+    path=python.parent/'Lib/site-packages/qwen_asr/inference/qwen3_forced_aligner.py'
+    source=path.read_text(encoding='utf-8')
+    eager='\nimport nagisa\n'
+    method='    def tokenize_japanese(self, text: str) -> List[str]:\n'
+    if eager not in source:
+        if method+'        import nagisa\n' not in source:
+            raise RuntimeError('Qwen SDK 入口发生变化，无法验证日语分词器的延迟加载')
+        return
+    if method not in source:
+        raise RuntimeError('Qwen SDK 分词方法发生变化，不能应用路径兼容修复')
+    source=source.replace(eager,'\n',1).replace(method,method+'        import nagisa\n',1)
+    path.write_text(source,encoding='utf-8',newline='\n')
+
+
 def prepare(cuda=False):
     DESTINATION.mkdir(parents=True, exist_ok=True)
     marker = DESTINATION / 'manifest.json'
@@ -190,15 +290,21 @@ def prepare(cuda=False):
     core = clone_python(DESTINATION / 'python')
     packages_from(ROOT / '.venv/Lib/site-packages', core.parent)
     run(core, '-I', '-c', 'import av,numpy,faster_whisper,jieba,rapidfuzz,pypinyin,onnxruntime')
-    print('准备 Qwen、FireRed、ProPainter 的共享推理环境…', flush=True)
+    print('准备 Qwen、FireRed 的共享推理环境…', flush=True)
     ml = clone_python(DESTINATION / 'ml')
     packages_from(ROOT / 'data/engines/qwen/Lib/site-packages', ml.parent)
     torch = ['torch==2.9.1', 'torchvision==0.24.1', 'torchaudio==2.9.1']
     if cuda:
         torch = [name.replace('2.9.1', '2.9.1+cu126').replace('0.24.1', '0.24.1+cu126') for name in torch]
     install(ml, torch, cuda=cuda)
-    removal = json.loads((ROOT / 'config/removal.json').read_text(encoding='utf-8'))
-    install(ml, [*removal['packages'], 'cn2an==0.5.23', 'kaldiio==2.18.1',
+    # Qwen 与 FireRed 共用的推理依赖；版本与 requirements-lock.txt 保持一致。
+    install(ml, ['numpy==2.2.6', 'av==19.0.2', 'onnxruntime==1.31.1',
+                 'opencv-python-headless==4.12.0.88', 'Pillow==12.0.0',
+                 'scipy==1.16.3', 'imageio==2.37.0', 'einops==0.8.1',
+                 'tqdm==4.67.1', 'timm==1.0.22', 'PyYAML==6.0.3',
+                 'requests==2.32.5', 'addict==2.4.0', 'future==1.0.0',
+                 'matplotlib==3.10.7', 'scikit-image==0.25.2', 'yapf==0.43.0',
+                 'cn2an==0.5.23', 'kaldiio==2.18.1',
                  cached_wheel('kaldi-native-fbank', '1.23.0'),
                  cached_wheel('sentencepiece', '0.2.3'),
                  cached_wheel('textgrid', '1.5'),
@@ -213,19 +319,19 @@ def prepare(cuda=False):
                  cached_wheel('tifffile', '2026.11.8'),
                  cached_wheel('proces', '0.1.7')])
     firered = firered_source(ml.parent)
-    vendor = DESTINATION / 'vendor/propainter'
-    shutil.copytree(ROOT / 'data/engines/removal/source', vendor, dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    defer_japanese_tokenizer(ml)
     print('验证全部引擎入口和依赖，不下载任何权重…', flush=True)
     run(ml, '-I', '-c', 'import torch,torchvision,torchaudio,av,cv2,onnxruntime,timm,scipy; '
         'from qwen_asr import Qwen3ASRModel,Qwen3ForcedAligner; '
         'from fireredasr2s.fireredasr2 import FireRedAsr2,FireRedAsr2Config; '
         'print(torch.__version__,torch.version.cuda)')
     check_dependencies(ml)
-    info = {'format': 1, 'ready': True, 'core': 'python/python.exe', 'ml': 'ml/python.exe',
-            'engines': ['qwen', 'firered', 'removal'], 'torch_flavor': 'cuda' if cuda else 'cpu',
-            'cuda': '12.6' if cuda else None, 'propainter_revision': removal['revision'], 'firered': firered,
-            'dependency_sha256': runtime_key()}
+    info = {'format': 2, 'ready': True, 'core': 'python/python.exe', 'ml': 'ml/python.exe',
+            'engines': ['qwen', 'firered'], 'torch_flavor': 'cuda' if cuda else 'cpu',
+            'cuda': '12.6' if cuda else None, 'firered': firered,
+            'recipe_version': RECIPE_VERSION, 'python': _python_identity(),
+            'packages': {'core': freeze(core), 'ml': freeze(ml)},
+            'dependency_sha256': runtime_key(cuda)}
     marker.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding='utf-8', newline='\n')
     print('完整离线运行环境已就绪：' + str(DESTINATION), flush=True)
     return info

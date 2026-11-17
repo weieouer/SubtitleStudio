@@ -17,6 +17,26 @@ FILTERS = {
 BFFM_INITIALIZED = 1
 BFFM_SETSELECTIONW = 0x0400 + 103
 BrowseCallback = ctypes.WINFUNCTYPE(ctypes.c_int, w.HWND, w.UINT, w.LPARAM, w.LPARAM)
+OpenFileHook = ctypes.WINFUNCTYPE(ctypes.c_size_t, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
+WM_INITDIALOG = 0x0110
+WM_NOTIFY = 0x004E
+CDN_INITDONE = (-601) & 0xFFFFFFFF
+
+
+class NotificationHeader(ctypes.Structure):
+    _fields_ = [('hwndFrom',w.HWND), ('idFrom',ctypes.c_size_t), ('code',w.UINT)]
+
+
+def foreground_dialog(user, hwnd):
+    """只在初始化时提升真实选择框，隐藏owner的顶置属性不能代替它。"""
+    user.SetWindowPos.argtypes = [w.HWND,w.HWND,ctypes.c_int,ctypes.c_int,ctypes.c_int,ctypes.c_int,w.UINT]
+    user.SetWindowPos.restype = w.BOOL
+    user.SetForegroundWindow.argtypes = [w.HWND]
+    user.SetForegroundWindow.restype = w.BOOL
+    # HWND_TOPMOST + 不移动/不缩放/显示；窗口销毁后顶置状态随之释放。
+    user.SetWindowPos(hwnd,-1,0,0,0,0,0x0001 | 0x0002 | 0x0040)
+    # Windows可以拒绝焦点请求；Z序已单独提升，不依赖强抢输入焦点。
+    user.SetForegroundWindow(hwnd)
 
 
 def start_directory(body: dict) -> str:
@@ -62,6 +82,8 @@ def windows_dialog(body: dict) -> list[str]:
                                     w.HWND, w.HMENU, w.HINSTANCE, ctypes.c_void_p]
     user.CreateWindowExW.restype = w.HWND
     user.DestroyWindow.argtypes = [w.HWND]
+    user.GetParent.argtypes = [w.HWND]
+    user.GetParent.restype = w.HWND
     # 顶置隐藏 owner 让选择框显示在应用前方；不创建控制台窗口。
     owner = user.CreateWindowExW(0x8 | 0x80, "STATIC", "Subtitle Studio",
                                  0, 0, 0, 0, 0, None, None, None, None)
@@ -72,7 +94,7 @@ def windows_dialog(body: dict) -> list[str]:
         title = str(body.get("title") or "选择文件")
         initial = start_directory(body)
         if kind == "dir":
-            return windows_directory(owner, title, initial)
+            return windows_directory(owner, title, initial, user=user)
         label, pattern = FILTERS[kind]
         buffer = ctypes.create_unicode_buffer(65536)
         options = OpenFileName()
@@ -85,7 +107,17 @@ def windows_dialog(body: dict) -> list[str]:
         options.lpstrTitle = title
         if initial:
             options.lpstrInitialDir = initial
-        options.Flags = 0x80000 | 0x1000 | 0x800 | 0x8  # Explorer / file/path exist / no chdir
+        options.Flags = 0x80000 | 0x1000 | 0x800 | 0x8 | 0x20  # Explorer / file/path exist / no chdir / hook
+        @OpenFileHook
+        def show_on_top(hwnd, message, wparam, lparam):
+            initialized = message == WM_INITDIALOG
+            if message == WM_NOTIFY and lparam:
+                initialized = ctypes.cast(lparam,ctypes.POINTER(NotificationHeader)).contents.code == CDN_INITDONE
+            if initialized:
+                # Explorer式hook属于子对话框；提升它的父窗口才是完整文件选择框。
+                foreground_dialog(user,user.GetParent(hwnd) or hwnd)
+            return 0
+        options.lpfnHook = ctypes.cast(show_on_top,ctypes.c_void_p).value
         if body.get("multiple", False):
             options.Flags |= 0x200
         common = ctypes.WinDLL("comdlg32")
@@ -102,7 +134,7 @@ def windows_dialog(body: dict) -> list[str]:
         user.DestroyWindow(owner)
 
 
-def windows_directory(owner, title: str, initial: str = "") -> list[str]:
+def windows_directory(owner, title: str, initial: str = "", *, user=None) -> list[str]:
     shell = ctypes.WinDLL("shell32")
     ole = ctypes.OleDLL("ole32")
     ole.CoInitializeEx.argtypes = [ctypes.c_void_p, w.DWORD]
@@ -117,21 +149,21 @@ def windows_directory(owner, title: str, initial: str = "") -> list[str]:
         display = ctypes.create_unicode_buffer(260)
         info = BrowseInfo(hwndOwner=owner, pszDisplayName=ctypes.cast(display, w.LPWSTR),
                           lpszTitle=title, ulFlags=0x51)
-        callback = initial_buffer = None
-        if initial:
+        if user is None:
             user = ctypes.WinDLL("user32", use_last_error=True)
-            user.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
-            user.SendMessageW.restype = ctypes.c_ssize_t
-            initial_buffer = ctypes.create_unicode_buffer(initial)
+        user.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
+        user.SendMessageW.restype = ctypes.c_ssize_t
+        initial_buffer = ctypes.create_unicode_buffer(initial) if initial else None
 
-            @BrowseCallback
-            def select_initial(hwnd, message, lparam, data):
-                if message == BFFM_INITIALIZED:
+        @BrowseCallback
+        def select_initial(hwnd, message, lparam, data):
+            if message == BFFM_INITIALIZED:
+                if initial_buffer is not None:
                     user.SendMessageW(hwnd, BFFM_SETSELECTIONW, 1,
                                       ctypes.cast(initial_buffer, ctypes.c_void_p).value)
-                return 0
-            callback = select_initial
-            info.lpfn = ctypes.cast(select_initial, ctypes.c_void_p)
+                foreground_dialog(user,hwnd)
+            return 0
+        info.lpfn = ctypes.cast(select_initial, ctypes.c_void_p)
         pidl = shell.SHBrowseForFolderW(ctypes.byref(info))
         if not pidl:
             return []

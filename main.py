@@ -1,4 +1,4 @@
-"""字幕工作室唯一入口：运行、配置项目环境、构建便携包。"""
+"""字幕工作室唯一入口：运行、配置项目环境、构建完整安装包。"""
 from __future__ import annotations
 
 import argparse

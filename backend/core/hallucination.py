@@ -4,7 +4,7 @@
 （"请不吝点赞、订阅、转发、打赏支持明镜与点点栏目"之类）。这些句子有几个共同点：
 命中训练数据里的固定说法、时长远长于字数能支撑的长度、模型自己的 no_speech 偏高。
 
-只做两件事：给条目加标记，并默认把它排除在预览和导出之外。
+只给条目加标记，保留预览和导出，由用户人工判断。
 字幕文字、原始时间和 ASR 记录都保留，用户随时可以恢复导出或删除。
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ SUSPECT_NO_SPEECH = 0.5
 def analyze(cue: dict) -> dict | None:
     """返回幻觉判定，None 表示正常字幕。只看文本、时长和模型分数。
 
-    confirmed=True 的条目默认不导出；confirmed=False 的只是提醒，导出保持原样。
+    confirmed 只表示规则信号强弱，不代表确定是幻觉，不决定导出。
     """
     text = str(cue.get("text") or "")
     plain = _plain(text)
@@ -82,8 +82,7 @@ def _mark_repeats(cues: list[dict]) -> None:
             if cue.get("hallucination") or cue.get("review_decision") == "included":
                 continue
             cue["hallucination"] = {"reasons": ["repeated-text"], "phrases": [],
-                                    "confirmed": False, "automatic_exclusion": False,
-                                    "repeats": len(run)}
+                                    "confirmed": False, "repeats": len(run)}
             cue["needs_review"] = True
 
     for cue in cues:
@@ -97,25 +96,28 @@ def _mark_repeats(cues: list[dict]) -> None:
     flush()
 
 
-def mark(cues: list[dict], *, auto_exclude: bool = True) -> list[dict]:
-    """就地标记幻觉条目。返回自动排除（不导出）的条目。
+def mark(cues: list[dict]) -> list[dict]:
+    """就地标记幻觉条目，只标记供人工复核；返回明显异常项。
 
     已标记过的条目不再重复处理，尊重用户手工恢复导出的决定。
     """
     _mark_repeats(cues)
     marked = []
     for cue in cues:
+        # 修复旧工程的自动排除；明确的人工“不导出”优先保留。
+        old = cue.get('hallucination')
+        if old and cue.get('review_decision') != 'non_script':
+            if cue.get('exclude_export'):
+                cue['exclude_export'] = False
+            old['automatic_exclusion'] = False
         if cue.get("hallucination") or cue.get("review_decision") == "included":
             continue
         info = analyze(cue)
         if not info:
             continue
-        if not auto_exclude:
-            info={**info,'confirmed':False,'automatic_exclusion':False}
         cue["hallucination"] = info
         cue["needs_review"] = True
-        if auto_exclude and info["confirmed"]:
+        if info["confirmed"]:
             cue["is_noise"] = True
-            cue["exclude_export"] = True
             marked.append(cue)
     return marked

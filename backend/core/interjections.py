@@ -1,9 +1,8 @@
 """识别和去除整条及句首、句末的语气词。
 
-校验用红色“语气词”标出整条笑声、叹气、填充音；关闭“语气词”开关时，
-提取和校准会直接删除这些整条字幕，并去掉对话句首、句末的“啊、呀、
-哎、唉、哈哈”等语气词。开启时保留整条语气词，校准只去掉可靠参考里
-没有的语气词。
+关闭“语气词”开关时，提取删除整条笑声、叹气、填充音，并去掉独立的
+句首句末语气词。已有字幕里的语气词只标为明显错误供人工处理；
+校准和对齐不按该开关自动删除现有条目。
 
 只处理句首、句末和标点之间的独立语气词；句中正常字词、引号里的“啊”
 以及“呢、吗、吧”等语法助词不动。
@@ -136,7 +135,7 @@ def strip_interjection_cues(cues: list[dict]) -> tuple[list[dict], int, int]:
 def mark_interjections(cues: list[dict]) -> list[dict]:
     """给每条字幕写入 interjection 标记并返回命中的条目，不删除字幕。
 
-    校验用这个标记显示红色“语气词”；提取在开关关闭时已经删除，
+    校验用这个标记显示红色“明显错误”；提取在开关关闭时已经删除，
     开关开启时保留并在这里标记。
     """
     flagged: list[dict] = []
@@ -146,15 +145,3 @@ def mark_interjections(cues: list[dict]) -> list[dict]:
         if hit:
             flagged.append(cue)
     return flagged
-
-
-def drop_interjections(cues: list[dict]) -> tuple[list[dict], list[dict]]:
-    """返回（保留的字幕, 被丢弃的字幕摘要）；保留给旧接口和测试使用。"""
-    kept: list[dict] = []
-    dropped: list[dict] = []
-    for cue in cues:
-        if is_interjection(cue.get("text", "")):
-            dropped.append({"id": cue.get("id"), "text": cue.get("text", "")})
-        else:
-            kept.append(cue)
-    return kept, dropped
