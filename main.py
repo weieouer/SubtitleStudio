@@ -18,7 +18,7 @@ from tools.development import (
 
 ROOT = Path(__file__).resolve().parent
 
-
+#wyj
 def run_application(arguments: list[str]) -> int:
     # 后端保留现有 core 模块组织；从任何工作目录启动都使用本项目的源码。
     sys.path.insert(0, str(ROOT / 'backend'))
