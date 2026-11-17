@@ -111,7 +111,7 @@ class AlignmentWindowTests(unittest.TestCase):
              patch.object(alignment,'weights_present',return_value=True), \
              patch.object(alignment,'ensure_runtime'),patch.object(alignment,'runtime_python',return_value=sys.executable), \
              patch.object(alignment,'model_directory',return_value=Path(folder)), \
-             patch.object(alignment,'word_timing_issue',return_value=None), \
+             patch.object(alignment,'cue_timing_issue',return_value=None), \
              patch('core.media.decode_audio',return_value=audio), \
              patch('core.audio_boundaries.refine_boundaries',side_effect=lambda items,*args,**kwargs:items), \
              patch('core.audio_boundaries.cap_durations',return_value=[]), \

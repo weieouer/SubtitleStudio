@@ -7,7 +7,7 @@ import unittest
 import wave
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
-from core.alignment_quality import cue_word_slices, plain, word_timing_issue
+from core.alignment_quality import cue_word_slices, plain, word_timing_issue, cue_timing_issue
 from engine_runner import align_chunk
 from core.alignment import apply_word_times, _alignment_windows, _resolve_overlaps
 from core.segment import split_on_gaps, _reference_break_at
@@ -20,6 +20,48 @@ class Word:
 
 
 class AlignmentQualityTests(unittest.TestCase):
+    def test_short_cue_late_inside_coarse_input_keeps_valid_word_times(self):
+        for text,end,starts,ends in [('四师姐',3.52,[3.16,3.32,3.40],[3.32,3.40,3.56]),
+                                    ('拿到了',2.32,[2.02,2.18,2.34],[2.18,2.34,2.42])]:
+            with self.subTest(text=text),tempfile.TemporaryDirectory() as folder:
+                class Model:
+                    calls=0
+                    def align(self,**kwargs):
+                        self.calls+=1
+                        return [[Word(t,a,b) for t,a,b in zip(text,starts,ends)]]
+                path=Path(folder)/'audio.wav'
+                with wave.open(str(path),'wb') as output:
+                    output.setnchannels(1);output.setsampwidth(2);output.setframerate(1000)
+                    output.writeframes(b'\0\0'*6000)
+                cue={'text':text,'start':0.,'end':end};model=Model()
+                words,summary=align_chunk(model,{'path':str(path),'text':text,'cues':[cue]})
+                result=apply_word_times([cue],[0],words)[0]
+            self.assertEqual(model.calls,1)
+            self.assertEqual(summary,{'attempted':0,'accepted':0,'unresolved':0})
+            self.assertNotIn('alignment_error',result)
+            self.assertEqual((result['start'],result['end']),(starts[0],ends[-1]))
+
+    def test_single_edge_outlier_is_checked_against_several_interior_words(self):
+        words=[{'text':'你','start':0.,'end':1.1},{'text':'们','start':1.1,'end':1.25},
+               {'text':'回','start':1.25,'end':1.4},{'text':'家','start':1.4,'end':1.55}]
+        self.assertIn('句首',cue_timing_issue('你们回家',words,1.6))
+        tail=[{'text':'你','start':0.,'end':.15},{'text':'们','start':.15,'end':.3},
+              {'text':'回','start':.3,'end':.45},{'text':'家','start':.45,'end':1.55}]
+        self.assertIn('句尾',cue_timing_issue('你们回家',tail,1.6))
+        slow=[{'text':'你','start':0.,'end':.4},{'text':'们','start':.4,'end':.8},
+              {'text':'回','start':.8,'end':1.2},{'text':'家','start':1.2,'end':1.6}]
+        self.assertIsNone(cue_timing_issue('你们回家',slow,1.6))
+
+    def test_short_sentence_cannot_hide_stretch_across_individually_valid_words(self):
+        words=[{'text':'你','start':0.,'end':1.5},{'text':'好','start':1.5,'end':3.}]
+        self.assertIsNone(word_timing_issue(words))
+        self.assertIn('短句',cue_timing_issue('你好',words,1.))
+
+    def test_short_sentence_ratio_flags_stretch_without_cutting_slow_speech(self):
+        words=[{'text':'我们','start':0.,'end':1.},{'text':'回家','start':1.,'end':2.4}]
+        self.assertIn('拉长',cue_timing_issue('我们回家',words,.6))
+        self.assertIsNone(cue_timing_issue('我们回家',words,2.))
+
     def test_late_tail_retries_whole_sentence_while_normal_start_is_preserved(self):
         class Model:
             calls=0
@@ -137,6 +179,49 @@ class AlignmentQualityTests(unittest.TestCase):
         self.assertEqual(summary, {'attempted': 1, 'accepted': 1, 'unresolved': 0})
         self.assertEqual([(w['text'], w['start'], w['end']) for w in words],
                          [('大哥', .1, .9)])
+
+    def test_retry_window_excludes_neighbour_line_for_repeated_short_cue(self):
+        class Model:
+            def __init__(self):
+                self.calls = []
+
+            def align(self, audio, text, language):
+                with wave.open(audio, 'rb') as source:
+                    duration = source.getnframes()/source.getframerate()
+                self.calls.append((text, duration))
+                if len(self.calls) == 1:
+                    return [[Word('四',1.6,1.76), Word('师',1.76,1.84), Word('姐',1.84,2.04),
+                             Word('东',2.56,2.64), Word('西',2.64,2.72), Word('拿',2.72,2.88),
+                             Word('到',2.88,3.04), Word('了',4.64,4.72),
+                             Word('拿',5.16,5.24), Word('到',5.24,5.4), Word('了',5.4,5.48)]]
+                if duration > 2:
+                    return [[Word('东',.32,1.28), Word('西',1.28,1.28),
+                             Word('拿',1.36,1.52), Word('到',1.52,1.68), Word('了',1.68,1.76)]]
+                return [[Word('东',.44,.52), Word('西',.52,.6), Word('拿',.6,.76),
+                         Word('到',.76,.92), Word('了',.92,1.)]]
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'audio.wav'
+            with wave.open(str(path), 'wb') as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(1000)
+                output.writeframes(struct.pack('<h', 0)*6500)
+            cues = [{'text':'四师姐','start':0.,'end':2.04},
+                    {'text':'东西拿到了？','start':2.04,'end':3.1},
+                    {'text':'拿到了','start':5.16,'end':5.53}]
+            model = Model()
+            words, summary = align_chunk(model, {
+                'path':str(path), 'text':'四师姐\n东西拿到了？\n拿到了', 'cues':cues})
+            applied = apply_word_times([dict(cue) for cue in cues], [0, 1, 2], words)
+        # 第一次主对齐把问句的“了”甩到下一句；重试不能把上一句尾音留在窗口里。
+        self.assertEqual(len(model.calls), 2)
+        self.assertGreater(model.calls[1][1], 1.)
+        self.assertLess(model.calls[1][1], 2.)
+        self.assertEqual(summary, {'attempted':1, 'accepted':1, 'unresolved':0})
+        # 交付标准是整段首尾，不是中间逐字；这里确认问句的起止都落到音频上。
+        self.assertNotIn('alignment_error', applied[1])
+        self.assertEqual((applied[1]['start'], applied[1]['end']), (2.56, 3.12))
 
     def test_bad_internal_gap_keeps_sentence_whole_and_preserves_other_cue(self):
         cues = [{'text':'大哥别怕','start':1.,'end':3.},

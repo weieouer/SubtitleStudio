@@ -1221,7 +1221,7 @@ export async function runFrontendTests(source) {
   await test('operation_markers_control_badges_and_manual_timing_never_calibrates_text',async()=>{
     const ctx=make({},['badgesHtml']);const cue={text:'原句',start:1,end:2,script_text:'正句',reference_match:{status:'typo',reference:{text:'正句'}},alignment:{engine:'inherited'}};
     assert.equal(ctx.cueStageStatuses(cue).calibration.label,'尚未校准');assert.equal(ctx.cueStageStatuses(cue).alignment.label,'尚未对齐');
-    cue.content_stage='verify';assert.equal(ctx.cueStageStatuses(cue).calibration.label,'疑似问题');assert.equal(ctx.cueTextClass(cue),'context-warning');
+    cue.content_stage='verify';assert.equal(ctx.cueStageStatuses(cue).calibration.label,'疑似问题');assert.equal(ctx.cueTextClass(cue),'minor-warning');
     cue.reference_match={status:'high',query_text:cue.text};cue.script_text=cue.text;
     assert.equal(ctx.cueStageStatuses(cue).calibration.label,'校验通过');
     ctx.completeModification(cue);assert.equal(ctx.cueStageStatuses(cue).calibration.label,'校准通过');
@@ -1390,6 +1390,27 @@ export async function runFrontendTests(source) {
       path==='/api/srt/parse'?{cues}:{project:{cues,script_path:'B-reference.txt',script_lines:[]}}},['importSrt','restoredScriptNames']);
     ctx.state.media=null;ctx.state.scriptPath='A-reference.txt';
     await ctx.importSrt();assert.equal(ctx.state.scriptPath,'B-reference.txt');
+  });
+  await test('vocal_helper_is_downloadable_without_replacing_selected_aligner',async()=>{
+    const elements=new Map();
+    const ctx=make({$:id=>{if(!elements.has(id))elements.set(id,{dataset:{}});return elements.get(id);},
+      modelActionHtml:m=>'<button data-download="'+m.name+'">下载</button>'},['renderAuxModels','modelOptionHtml']);
+    ctx.state.auxModels=[{name:'aligner',label:'对齐模型',available:true},
+      {name:'vocals',label:'人声分离',available:true,purpose:'alignment_support'}];
+    ctx.state.settings.auxModel='aligner';ctx.renderAuxModels();
+    assert.equal(elements.get('#auxBtnText').textContent,'对齐模型');
+    assert.match(elements.get('#auxMenu').innerHTML,/data-aux="vocals"[^>]*disabled/);
+    assert.match(elements.get('#auxMenu').innerHTML,/data-download="vocals"/);
+    ctx.state.settings.auxModel='vocals';ctx.renderAuxModels();
+    assert.equal(elements.get('#auxBtnText').textContent,'对齐模型');
+  });
+  await test('completed_vocal_download_keeps_the_forced_aligner_setting',async()=>{
+    const ctx=make({api:async path=>path==='/api/models/download'?{download:{status:'done',model:'vocals'}}:
+      {models:[],auxiliary:[{name:'aligner'},{name:'vocals',purpose:'alignment_support'}]},
+      showDownloadProgress:()=>{},renderModels:()=>{}},['pollModelDownload']);
+    ctx.state.downloadActive=true;ctx.state.settings.auxModel='aligner';
+    await ctx.pollModelDownload();
+    assert.equal(ctx.state.settings.auxModel,'aligner');assert.equal(ctx.state.downloadActive,false);
   });
   return {total: results.length, all_passed: results.every(r => r.passed), results};
 }

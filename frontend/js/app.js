@@ -1194,10 +1194,11 @@ function modelOptionHtml(model) {
     (parts.length ? '<small class="model-desc">' + escapeHtml(parts.join(' · ')) + '</small>' : '');
 }
 function renderAuxModels() {
-  const selected = state.auxModels.find(m => m.name === state.settings.auxModel) || state.auxModels[0];
+  const selectable = state.auxModels.filter(m => m.purpose !== 'alignment_support');
+  const selected = selectable.find(m => m.name === state.settings.auxModel) || selectable[0];
   $('#auxBtnText').textContent = selected?.label || 'Qwen3-ForcedAligner-0.6B';
   $('#auxLabel').dataset.tip = state.auxModels.map(m => m.label + '：' + m.description).join('\n');
-  $('#auxMenu').innerHTML = state.auxModels.map(m => '<div class="model-choice"><button type="button" class="model-option" role="option" data-aux="' + escapeHtml(m.name) + '" aria-selected="' + (m.name === selected?.name) + '" ' + (!m.available ? 'disabled' : '') + '>' + modelOptionHtml(m) + '</button>' + modelActionHtml(m) + '</div>').join('');
+  $('#auxMenu').innerHTML = state.auxModels.map(m => '<div class="model-choice"><button type="button" class="model-option" role="option" data-aux="' + escapeHtml(m.name) + '" aria-selected="' + (m.name === selected?.name) + '" ' + (!m.available || m.purpose === 'alignment_support' ? 'disabled' : '') + '>' + modelOptionHtml(m) + '</button>' + modelActionHtml(m) + '</div>').join('');
 }
 function positionAuxMenu() {
   const menu = $('#auxMenu');
@@ -1272,7 +1273,7 @@ async function pollModelDownload() {
       if (state.modelDownload.status === 'done' && state.downloadActive) {
         if (gpuInstall) toast('GPU 环境已就绪，可在“设备”选择自动或 GPU', 'success', 7000);
         else if (state.models.some(m => m.name === state.modelDownload.model)) state.settings.model = state.modelDownload.model;
-        else state.settings.auxModel = state.modelDownload.model;
+        else if (state.auxModels.some(m => m.name === state.modelDownload.model && m.purpose !== 'alignment_support')) state.settings.auxModel = state.modelDownload.model;
         playSound('success');
       } else if (state.modelDownload.status === 'error' && gpuInstall) {
         toast(state.modelDownload.message, 'error', 9000);
@@ -2172,7 +2173,8 @@ function confirmCueTiming(cue,source='manual') {
 
 function cueTextClass(cue) {
   const statuses=Object.values(cueStageStatuses(cue));
-  if(statuses.some(s=>s.status==='suspect'))return 'context-warning';
+  if(statuses.some(s=>s.status==='suspect'&&s.obvious))return 'context-warning';
+  if(statuses.some(s=>s.status==='suspect'))return 'minor-warning';
   return statuses.some(s=>s.status==='passed')?'passed':'';
 }
 

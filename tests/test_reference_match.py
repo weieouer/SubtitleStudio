@@ -13,6 +13,41 @@ def cue(text, i=0, **more):
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_speaker_numeral_never_merges_into_first_spoken_number(self):
+        raw='张三：三个人来了。\n李四：四个人回家了。'
+        result=self.match(['三个人来了','四个人回家了'],raw)
+        for cue in result['cues']:
+            self.assertEqual(cue['reference_match']['status'],'high')
+            ref=cue['reference_match']['reference']
+            self.assertEqual(raw[ref['start']:ref['end']],ref['text'])
+
+    def test_speaker_colon_is_not_part_of_dialogue_reference(self):
+        for raw in ('张三：我们明天去学校。\n李四：好啊一起去。',
+                    '张三：“我们明天去学校。”李四：“好啊一起去。”',
+                    '张三：我们明天去学校；李四：好啊一起去。',
+                    'Alice: 我们明天去学校。\nBob: 好啊一起去。',
+                    '张三（冷笑）："我们明天去学校。"\n李四："好啊一起去。"'):
+            with self.subTest(raw=raw):
+                result=self.match(['我们明天去学校','好啊一起去'],raw)
+                for cue in result['cues']:
+                    ref=cue['reference_match']['reference']
+                    self.assertIsNotNone(ref)
+                    self.assertNotIn('张三',ref['text']);self.assertNotIn('李四',ref['text'])
+                    self.assertFalse(ref['reference_only'])
+                    self.assertEqual(raw[ref['start']:ref['end']],ref['text'])
+
+    def test_single_cue_cannot_consume_two_speakers_dialogues(self):
+        result=self.match(['我们明天去学校好啊一起去'],
+                          '张三：“我们明天去学校。”李四：“好啊一起去。”')
+        ref=result['cues'][0]['reference_match']['reference']
+        if ref:
+            self.assertFalse('我们明天去学校' in ref['text'] and '好啊一起去' in ref['text'])
+
+    def test_time_colon_and_explanatory_colon_are_not_speaker_prefixes(self):
+        for text in ('明天12:30见','答案：我们明天去学校'):
+            out=self.match([text],text)['cues'][0]
+            self.assertEqual(out['reference_match']['status'],'high')
+
     def test_all_punctuation_splits_reference_but_numeric_symbols_stay_internal(self):
         raw = '你好，世界！明天12:30见；价格3.5元……再见？'
         self.assertEqual([raw[a:b] for a,b in sentence_ranges(raw)],

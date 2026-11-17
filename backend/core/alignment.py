@@ -15,7 +15,7 @@ from rapidfuzz.distance import Levenshtein
 from .model_manager import runtime_python, weights_present, model_directory, ensure_runtime
 from .paths import RESULTS_DIR
 from .reference_match import normalized, _reference_boundaries
-from .alignment_quality import word_timing_issue
+from .alignment_quality import cue_timing_issue
 
 
 def invalidate_alignment(cue, reason):
@@ -98,11 +98,11 @@ def apply_word_times(cues, indices, words, offset=0):
         if not mapped_words or any(w['end']<=w['start'] for w in mapped_words):
             invalidate_alignment(cue,'对齐词时间不可用，已保留输入时间')
             continue
-        issue = word_timing_issue(mapped_words)
+        input_span=float(cue['end'])-float(cue['start'])
+        issue = cue_timing_issue(cue['text'],mapped_words,input_span)
         if issue:
             invalidate_alignment(cue, issue+'，已保留输入时间，请试听复核')
             continue
-        input_span=float(cue['end'])-float(cue['start'])
         stretched=any(w['end']-w['start']>max(3.,len(w['word'])*.6+1.) for w in mapped_words)
         if (stretched and end-start>max(input_span*3,input_span+3.)
                 and abs(start-float(cue['start']))>2.):
@@ -292,6 +292,10 @@ def align_cues(path, cues, device, on_progress=None, cancel_event=None):
     # 对齐失败时要用“本次输入”的时间回退；不能用 original_start，它可能来自更早的识别。
     input_times = [(float(cue['start']), float(cue['end'])) for cue in cues]
     result = deepcopy(cues)
+    from .vocal_separation import MODEL_NAME as vocal_model
+    from .vocal_alignment import raw_cue_words, retry_windows, assist_vocal_alignment
+    vocal_ready = weights_present(vocal_model)
+    vocal_summary = {'available':vocal_ready, 'attempted':0, 'accepted':0, 'unresolved':0}
     report(.02,'按完整字幕及静音规划对齐窗口…')
     windows=_alignment_windows(cues,audio,cancel_event=cancel_event)
     with tempfile.TemporaryDirectory(prefix='align-',dir=RESULTS_DIR) as temp:
@@ -306,29 +310,32 @@ def align_cues(path, cues, device, on_progress=None, cancel_event=None):
             chunks.append({'path':str(filename),'text':'\n'.join(cues[i]['text'] for i in indices),'offset':start,'indices':indices,
                            'cues':[{'text':cues[i]['text'],'start':max(0.,float(cues[i]['start'])-start),
                                     'end':min(end-start,float(cues[i]['end'])-start)} for i in indices]})
-        request,result_path,progress=folder/'request.json',folder/'result.json',folder/'progress.json'
-        request.write_text(json.dumps({'engine':'aligner','model':str(model_directory(name)),'device':device,'chunks':chunks},ensure_ascii=False),encoding='utf-8')
-        log=folder/'engine.log'
-        with log.open('w',encoding='utf-8') as out:
-            process=subprocess.Popen([str(runtime_python('qwen')),str(Path(__file__).resolve().parents[1]/'engine_runner.py'),str(request),str(result_path),str(progress)],
-                stdout=out,stderr=subprocess.STDOUT,env={**os.environ,'HF_HUB_OFFLINE':'1','TRANSFORMERS_OFFLINE':'1','PYTHONUTF8':'1'},
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
-            try:
-                while process.poll() is None:
+        def run_engine(payload, prefix, low, span):
+            request,result_path,progress=[folder/f'{prefix}-{suffix}.json' for suffix in ('request','result','progress')]
+            request.write_text(json.dumps({'model':str(model_directory(name)), 'device':device, **payload},ensure_ascii=False),encoding='utf-8')
+            log=folder/f'{prefix}-engine.log'
+            with log.open('w',encoding='utf-8') as out:
+                process=subprocess.Popen([str(runtime_python('qwen')),str(Path(__file__).resolve().parents[1]/'engine_runner.py'),str(request),str(result_path),str(progress)],
+                    stdout=out,stderr=subprocess.STDOUT,env={**os.environ,'HF_HUB_OFFLINE':'1','TRANSFORMERS_OFFLINE':'1','PYTHONUTF8':'1'},
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+                try:
+                    while process.poll() is None:
+                        check()
+                        try:
+                            p=json.loads(progress.read_text(encoding='utf-8')); report(low+span*p['progress'],p['message'])
+                        except (OSError,ValueError,KeyError): pass
+                        if cancel_event: cancel_event.wait(.3)
+                        else:
+                            import time
+                            time.sleep(.3)
                     check()
-                    try:
-                        p=json.loads(progress.read_text(encoding='utf-8')); report(.05+.9*p['progress'],p['message'])
-                    except (OSError,ValueError,KeyError): pass
-                    if cancel_event: cancel_event.wait(.3)
-                    else:
-                        import time
-                        time.sleep(.3)
-                if process.returncode or not result_path.exists():
-                    from .windows_runtime import engine_failure
-                    raise RuntimeError('强制对齐失败：'+engine_failure(log.read_text(encoding='utf-8',errors='replace')))
-                data=json.loads(result_path.read_text(encoding='utf-8'))
-            finally:
-                if process.poll() is None: process.terminate(); process.wait(timeout=10)
+                    if process.returncode or not result_path.exists():
+                        from .windows_runtime import engine_failure
+                        raise RuntimeError('强制对齐失败：'+engine_failure(log.read_text(encoding='utf-8',errors='replace')))
+                    return json.loads(result_path.read_text(encoding='utf-8'))
+                finally:
+                    if process.poll() is None: process.terminate(); process.wait(timeout=10)
+        data=run_engine({'engine':'aligner','chunks':chunks},'original',.05,.6 if vocal_ready else .9)
         for chunk,words in zip(chunks,data['aligned_words']):
             apply_word_times(result,chunk['indices'],words,chunk['offset'])
         check()
@@ -337,6 +344,35 @@ def align_cues(path, cues, device, on_progress=None, cancel_event=None):
         result=refine_boundaries(result,audio,cancel_event=cancel_event)
         # 短字幕不该占很长的时间；音效或相邻声音会把边界拉长，用语音活动收紧。
         duration_repairs=cap_durations(result,audio,input_times=input_times,cancel_event=cancel_event)
+        if vocal_ready:
+            raw_words=raw_cue_words(chunks,data['aligned_words'],len(cues))
+            retries=retry_windows(result,input_times,raw_words,duration)
+            vocal_summary.update(attempted=len(retries),unresolved=len(retries))
+            if retries:
+                def run_vocals(batch):
+                    return run_engine({'engine':'aligner-vocals','chunks':batch,
+                                       'vocal_model':str(model_directory(vocal_model))},'vocal',.7,.25)
+                before_vocals=deepcopy(result)
+                try:
+                    vocal_summary.update(assist_vocal_alignment(result,input_times,raw_words,audio,folder,run_vocals,report,check))
+                    # 再用原音轨检查一次，不能仅凭分离结果消掉原有的不确定性。
+                    if vocal_summary['accepted']:
+                        refined=refine_boundaries(deepcopy(result),audio,cancel_event=cancel_event)
+                        for i,cue in enumerate(result):
+                            if (cue.get('alignment') or {}).get('vocal_assisted'):
+                                if refined[i].get('alignment_error'):
+                                    result[i]=before_vocals[i]
+                                    vocal_summary['accepted']-=1;vocal_summary['unresolved']+=1
+                                else:result[i]=refined[i]
+                except Cancelled:
+                    raise
+                except Exception as error:
+                    import logging
+                    logging.getLogger(__name__).warning('人声辅助复查未完成，保留原声对齐结果：%s',error)
+                    result=before_vocals
+                    vocal_summary.update(accepted=0,unresolved=len(retries))
+                    vocal_summary['error']='人声复查未完成，保留原声对齐结果'
+                check()
         # 失败项不能凭能量重定位后看起来像成功；也不能继续使用旧词时间拆句。
         for i,cue in enumerate(result):
             if cue.get('alignment_error'):
@@ -355,6 +391,7 @@ def align_cues(path, cues, device, on_progress=None, cancel_event=None):
                          'aligned_count':len(result)-len(skipped),'failed_count':len(skipped),
                          'duration_repairs':duration_repairs,
                          'local_retry':data.get('local_retry',{}),
+                         'vocal_assistance':vocal_summary,
                          'windowing':{'strategy':'cue_silence_context','count':len(windows),
                                       'windows':windows},
                          'skipped': skipped}

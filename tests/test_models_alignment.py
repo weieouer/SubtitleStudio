@@ -202,7 +202,7 @@ class DownloadTests(unittest.TestCase):
 
     def test_catalog_primary_three_and_builtin_vad(self):
         self.assertEqual(list(models.CATALOG),['large-v3','fireredasr2-aed','qwen3-asr-1.7b'])
-        self.assertEqual(set(models.AUXILIARY),{'qwen3-forcedaligner-0.6b','silero-vad'})
+        self.assertEqual(set(models.AUXILIARY),{'qwen3-forcedaligner-0.6b','silero-vad','hdemucs-vocals'})
         self.assertTrue(models.weights_present('silero-vad'))
 
     def test_local_model_aliases_ready_without_runtime_or_weight_download(self):

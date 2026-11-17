@@ -140,7 +140,17 @@ def _compact_edge_word(words, at_end=False):
     gap=(float(first['start'])-float(second['end']) if at_end else
          float(second['start'])-float(first['end']))
     length=len(plain(first.get('word',first.get('text',''))))
-    return length>0 and .02<=span<=min(.8,max(.32,length*.25)) and -.001<=gap<=.16+.001
+    context=words[-4:] if at_end else words[:4]
+    pairs=list(zip(context,context[1:]))
+    if at_end:pairs.reverse()
+    connected=0
+    # 只检查紧邻首尾的连续词组；“守住！[停顿]援军赶来”中的句间停顿，
+    # 不能推翻“守/住”自身连贯的证据。仍保留 VAD 未确认的复核提示。
+    for left,right in pairs:
+        if not -.001<=float(right['start'])-float(left['end'])<=.20+.001:break
+        connected+=1
+    return (length>0 and .02<=span<=min(.8,max(.32,length*.25))
+            and -.001<=gap<=.16+.001 and connected>0)
 
 
 def _compact_leading_word(words):
@@ -151,11 +161,29 @@ def _context_supports_edge(onset, speech_end, words, at_end=False):
     """待采用的人声区间还需与句内相邻词相接，避免将孤立音效当成边界。"""
     if len(words)<2:
         return True
-    context=words[-2] if at_end else words[1]
-    if _run_overlap(onset,speech_end,context)>=.04:
-        return True
-    gap=onset-float(context['end']) if at_end else float(context['start'])-speech_end
-    return 0<=gap<=.16
+    context=words[-4:-1] if at_end else words[1:4]
+    supported=0
+    for word in context:
+        span=float(word['end'])-float(word['start'])
+        overlap=_run_overlap(onset,speech_end,word)
+        gap=onset-float(word['end']) if at_end else float(word['start'])-speech_end
+        if overlap>=min(.04,span*.4) or 0<=gap<=.16:
+            supported+=1
+    return supported>=min(2,len(context))
+
+
+def _boundary_context_conflict(probabilities, low, words, at_end=False):
+    """边界只落在孤立声段、句内多个词却支持另一声段时，仅提示复核。"""
+    if probabilities is None or low is None or len(words)<3:
+        return False
+    edge=words[-1] if at_end else words[0]
+    context=words[-4:-1] if at_end else words[1:4]
+    runs=[(low+a*VAD_FRAME_SECONDS,low+b*VAD_FRAME_SECONDS) for a,b in _vad_runs(probabilities)]
+    edge_runs=[run for run in runs if _run_overlap(*run,edge)>.02]
+    if not edge_runs or any(_context_supports_edge(*run,words,at_end) for run in edge_runs):
+        return False
+    return any(sum(_run_overlap(*run,w)>=min(.04,(float(w['end'])-float(w['start']))*.4)
+                   for w in context)>=2 for run in runs if _run_overlap(*run,edge)<=.02)
 
 
 def _vad_start(audio, sample_rate, start, end, words, probabilities=None, low=None, max_span=3.0):
@@ -453,6 +481,9 @@ def refine_boundaries(cues,audio,sample_rate=16000,max_shift=.18,cancel_event=No
     裁剪网格对齐全片10ms步长，保留上一帧以正确计算频谱变化。
     """
     if not cues:return cues
+    def usable(neighbour):
+        return not (neighbour.get('alignment_error') or neighbour.get('word_timing_error')
+                    or (neighbour.get('alignment') or {}).get('stale'))
     duration=len(audio)/sample_rate
     baseline=global_noise_floor(audio,sample_rate)
     t_min=max(0,min(float(c['start']) for c in cues)-0.35)
@@ -504,6 +535,8 @@ def refine_boundaries(cues,audio,sample_rate=16000,max_shift=.18,cancel_event=No
             if cue.get('alignment'):
                 warnings=[];errors=[]
                 for at_end,name,context in ((False,'首字','后续'),(True,'尾字','前面')):
+                    if _boundary_context_conflict(vad_frames,vad_low,words,at_end):
+                        warnings.append(f'{name}仅由孤立声段支持，与{context}多个字词的人声区间不一致；保留模型时间，请试听复核')
                     if not _edge_word_without_speech(vad_frames,vad_low,words,at_end):
                         continue
                     if _compact_edge_word(words,at_end):
@@ -531,8 +564,10 @@ def refine_boundaries(cues,audio,sample_rate=16000,max_shift=.18,cancel_event=No
                              and vad_end>=float(words[-1]['start'])+.05)
             if vad_end_applied:candidate_end=vad_end
         if intervals or vad_start_applied or vad_end_applied:
-            lower=result[-1]['end'] if result else 0
-            upper=float(cues[i+1]['start']) if i+1<len(cues) else duration
+            # 失败条目的粗时间不能挤掉邻句的可靠字词；最终统一处理重叠，
+            # 让失败条目让出空间，而不是在这里裁掉正常句的首尾。
+            lower=result[-1]['end'] if result and usable(result[-1]) else 0
+            upper=float(cues[i+1]['start']) if i+1<len(cues) and usable(cues[i+1]) else duration
             candidate_start=max(lower,0,start,candidate_start)
             candidate_end=min(upper,duration,end+max_shift,candidate_end)
             if candidate_end>candidate_start+.01 and (abs(candidate_start-start)<=max_shift+.001 or vad_start_applied) and (abs(candidate_end-end)<=max_shift+.001 or quiet_trim or vad_end_applied):

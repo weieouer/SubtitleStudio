@@ -19,6 +19,7 @@ from .paths import CONFIG_DIR, DATA_DIR, MODELS_DIR, ROOT_DIR
 from .progress_console import spawn as spawn_progress_console
 from .storage import atomic_json, locked_file
 from .model_sources import resolve_sources
+from .vocal_separation import MODEL_NAME as VOCAL_MODEL, MODEL_FILE as VOCAL_FILE, MODEL_SIZE as VOCAL_SIZE, MODEL_URL as VOCAL_URL, MODEL_SHA256 as VOCAL_SHA256
 
 CATALOG = {
     "large-v3": {"label": "Whisper large-v3", "engine": "whisper", "repo": "Systran/faster-whisper-large-v3", "size_hint": "约 3 GB",
@@ -31,6 +32,7 @@ CATALOG = {
 AUXILIARY = {
     "qwen3-forcedaligner-0.6b": {"label": "Qwen3-ForcedAligner-0.6B", "engine": "qwen", "repo": "Qwen/Qwen3-ForcedAligner-0.6B", "size_hint": "约 1.2 GB", "description": "字幕对齐音轨"},
     "silero-vad": {"label": "Silero VAD", "engine": "builtin", "repo": "", "size_hint": "已内置", "description": "人声检测，内置"},
+    VOCAL_MODEL: {"label": "人声分离（对齐辅助）", "engine": "qwen", "repo": "torchaudio/hdemucs_high", "size_hint": "约 320 MB", "purpose": "alignment_support", "description": "可选；下载后自动复查疑难句，减少音效干扰"},
 }
 ALL_MODELS = {**CATALOG, **AUXILIARY}
 DEFAULT_ENGINES = {
@@ -160,7 +162,7 @@ _ACTIVITY_LOCK = threading.Lock()
 _activity_written = 0.0
 
 
-WEIGHT_FILES = ('model.bin', 'model.safetensors', 'model.safetensors.index.json', 'model.pth.tar', 'model.pt')
+WEIGHT_FILES = ('model.bin', 'model.safetensors', 'model.safetensors.index.json', 'model.pth.tar', 'model.pt', VOCAL_FILE)
 LOCATION_FILE = '.locations.json'
 
 
@@ -410,6 +412,9 @@ def weights_present(name):
     spec = ALL_MODELS.get(name)
     if not spec:
         return False
+    if name == VOCAL_MODEL:
+        path = directory / VOCAL_FILE
+        return path.is_file() and path.stat().st_size == VOCAL_SIZE
     if spec["engine"] == "builtin":
         from importlib.util import find_spec
         package = find_spec("faster_whisper")
@@ -585,6 +590,10 @@ class ModelDownloads:
         return urlopen(Request(url, headers={"User-Agent": "SubtitleStudio/2.1", **(headers or {})}), timeout=timeout)
 
     def _files(self, name):
+        if name == VOCAL_MODEL:
+            self.update(source='PyTorch 官方', message='连接人声分离模型下载源…')
+            return 'hdemucs_high_trained', [{'name': VOCAL_FILE, 'size': VOCAL_SIZE, 'sha256': VOCAL_SHA256,
+                    'urls': [{'url': VOCAL_URL, 'label': 'PyTorch 官方'}]}]
         return resolve_sources(name, ALL_MODELS[name]['repo'], self._request, self.check, self.update)
 
     def _download_file(self, name, revision, item, completed, total):

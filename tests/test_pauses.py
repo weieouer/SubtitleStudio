@@ -14,6 +14,49 @@ import app
 
 
 class PauseTests(unittest.TestCase):
+    def test_reference_cut_keeps_pause_when_background_masks_acoustic_silence(self):
+        cue={'text':'守住！援军赶来','start':0.,'end':1.84,
+             'words':[{'word':'守住','start':0.,'end':.4},{'word':'援军赶来','start':1.2,'end':1.84}],
+             'audio_silences':[{'start':.38,'end':.54}],
+             'reference_match':{'status':'high','query_text':'守住！援军赶来','reference':{'text':'守住！援军赶来'}}}
+        before=deepcopy(cue)
+        parts,count=segment.split_on_gaps([cue],.3,16)
+        self.assertEqual(count,1)
+        self.assertEqual([c['text'] for c in parts],['守住！','援军赶来'])
+        self.assertEqual((parts[0]['end'],parts[1]['start']),(.4,1.2))
+        self.assertEqual(cue,before)
+
+    def test_large_word_gap_splits_when_silence_detection_misses_pause(self):
+        # 背景声让 audio_silences 漏掉 0.5 秒停顿，词时间仍是明显证据。
+        cue={'start':0.,'end':2.,'text':'我们回家明天再见','words':[
+            {'word':'我们回家','start':0.,'end':.8},
+            {'word':'明天再见','start':1.3,'end':2.}],
+            'audio_silences':[{'start':2.2,'end':2.4}]}
+        parts,n=segment.split_on_gaps([cue],.1,16)
+        self.assertEqual(n,1)
+        self.assertEqual([c['text'] for c in parts],['我们回家','明天再见'])
+        self.assertEqual((parts[0]['end'],parts[1]['start']),(.8,1.3))
+
+    def test_reference_break_overrides_single_tokenizer_token(self):
+        # 参考里的逗号是明确句界；分词把它并成一个词也不能吞掉断句。
+        class WholeTokenizer:
+            @staticmethod
+            def lcut(text):
+                return [text]
+        cue={'start':0.,'end':.85,'text':'这地方不大倒还藏着个','words':[
+            {'word':'这','start':0.,'end':.08},{'word':'地','start':.08,'end':.16},
+            {'word':'方','start':.16,'end':.24},{'word':'不','start':.24,'end':.32},
+            {'word':'大','start':.32,'end':.40},{'word':'倒','start':.45,'end':.53},
+            {'word':'还','start':.53,'end':.61},{'word':'藏','start':.61,'end':.69},
+            {'word':'着','start':.69,'end':.77},{'word':'个','start':.77,'end':.85}],
+            'reference_match':{'status':'high','query_text':'这地方不大倒还藏着个','stale':False,
+                               'reference':{'text':'这地方不大，倒还藏着个'}}}
+        with patch.object(segment,'jieba',WholeTokenizer()):
+            parts,n=segment.split_on_gaps([cue],.1,16)
+        self.assertEqual(n,1)
+        self.assertEqual([c['text'] for c in parts],['这地方不大','倒还藏着个'])
+        self.assertEqual((parts[0]['end'],parts[1]['start']),(.40,.45))
+
     def test_tenth_second_pause_survives_float_rounding(self):
         cue={'start':0,'end':.6,'text':'你好，走吧！','words':[
             {'word':'你好','start':0,'end':.2},{'word':'走吧','start':.3,'end':.6}]}

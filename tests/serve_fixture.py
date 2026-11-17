@@ -31,9 +31,10 @@ def fake_align(path, cues, device, on_progress=None, cancel_event=None):
         if cancel_event and cancel_event.is_set(): raise jobs.Cancelled()
         if on_progress: on_progress(i/4, '测试音轨对齐')
         time.sleep(.1)
-    for cue in result:
-        cue['start'] += .02; cue['end'] += .02
-        cue['alignment'] = {'engine':'fixture'}
+    for index,cue in enumerate(result):
+        # 模拟真实对齐的词时间和状态清理，避免只有一个空 alignment 记录的假成功。
+        alignment.apply_word_times(result,[index],[{'text':cue['text'],'start':cue['start']+.02,'end':cue['end']+.02}])
+        cue['alignment']['engine']='fixture'
     return result, {'duration':2}
 
 

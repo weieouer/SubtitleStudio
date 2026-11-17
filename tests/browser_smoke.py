@@ -199,7 +199,7 @@ def main():
             assert cdp.evaluate("document.querySelector('.progress').getBoundingClientRect().height>=13 && document.querySelector('#btnExtract').disabled && !document.querySelector('#btnCancel').hidden && document.querySelector('#jobMsg').textContent.includes('ModelScope') && document.querySelector('#jobMsg').textContent.includes('MB/s')")
             cdp.wait("state.modelDownload.status==='done' && state.models.some(m=>m.name==='fireredasr2-aed' && m.available)")
             cdp.click('#auxBtn')
-            assert cdp.evaluate("document.querySelectorAll('#auxMenu .model-choice').length===2 && document.querySelector('#auxMenu [data-aux=\"qwen3-forcedaligner-0.6b\"]').disabled && !document.querySelector('#auxMenu [data-aux=\"silero-vad\"]').disabled")
+            assert cdp.evaluate("document.querySelectorAll('#auxMenu .model-choice').length===3 && document.querySelector('#auxMenu [data-aux=\"qwen3-forcedaligner-0.6b\"]').disabled && !document.querySelector('#auxMenu [data-aux=\"silero-vad\"]').disabled")
             cdp.click('#auxMenu [data-download="qwen3-forcedaligner-0.6b"]')
             cdp.wait("downloadBusy()")
             cdp.click('#btnCancel')
@@ -207,9 +207,14 @@ def main():
             cdp.click('#auxBtn')
             cdp.click('#auxMenu [data-download="qwen3-forcedaligner-0.6b"]')
             cdp.wait("state.modelDownload.status==='done' && state.auxModels.some(m=>m.name==='qwen3-forcedaligner-0.6b' && m.available)")
+            cdp.click('#auxBtn')
+            assert cdp.evaluate("document.querySelector('#auxMenu [data-aux=\"hdemucs-vocals\"]').disabled && !!document.querySelector('#auxMenu [data-download=\"hdemucs-vocals\"]')")
+            cdp.click('#auxMenu [data-download="hdemucs-vocals"]')
+            cdp.wait("state.modelDownload.status==='done' && state.auxModels.some(m=>m.name==='hdemucs-vocals' && m.available)")
+            assert cdp.evaluate("state.settings.auxModel==='qwen3-forcedaligner-0.6b' && document.querySelector('#auxBtnText').textContent==='Qwen3-ForcedAligner-0.6B'")
             assert cdp.evaluate("document.querySelector('#modelLabel').dataset.tip.includes('Whisper') && document.querySelector('#auxLabel').dataset.tip.includes('Qwen3') && !document.querySelector('#btnImportSrt') && !document.querySelector('#queueCard')")
             cdp.evaluate("document.querySelector('.left').scrollTop=0;hideTip();toastEl.classList.remove('show')")
-            results.append({"name": "three_models_two_auxiliary_compact_download_cancel_resume_mock_transport", "passed": True})
+            results.append({"name": "three_models_optional_vocal_helper_compact_download_cancel_resume_mock_transport", "passed": True})
             cdp.evaluate("applyTheme('dark',false)")
             assert cdp.evaluate("(()=>{const colors=['.center','.left','.card'].map(s=>getComputedStyle(document.querySelector(s)).backgroundColor.match(/\\d+/g).slice(0,3).map(Number));return colors.every(c=>c[0]===c[1] && c[1]===c[2]) && colors[0][0]<colors[1][0] && colors[1][0]<colors[2][0]})()")
             results.append({'name':'neutral_dark_shell_and_deeper_center_without_warm_tint','passed':True})
@@ -573,7 +578,7 @@ def main():
             assert cdp.evaluate("(async()=>{await saveAll();const before=JSON.stringify({script:state.script,document:state.scriptDocument,names:state.scriptNames,cues:state.cues,history:state.history,redo:state.redoStack});const original=api;api=async(path,body,...args)=>path==='/api/dialog'?{paths:window.__pickerFiles}:path==='/api/script/parse'&&body.documents?{ok:true,lines:[],document:{version:1,text:''},stats:{total:0}}:original(path,body,...args);try{await pickScript()}finally{api=original}return before===JSON.stringify({script:state.script,document:state.scriptDocument,names:state.scriptNames,cues:state.cues,history:state.history,redo:state.redoStack})&&!state.scriptPickerOpen&&toastEl.textContent.includes('重启字幕工作室')&&!toastEl.textContent.includes('已导入：0')})()")
             results.append({'name':'old_backend_empty_success_preserves_existing_scripts_and_prompts_restart','passed':True})
             cdp.evaluate("Object.assign(state.settings,{width:20,subtitleMin:0,subtitleMax:0,subtitleLead:0,subtitleTail:0});syncSettingsUI();renderAll()")
-            diag = cdp.evaluate("(async()=>{const parsed=await api('/api/script/parse',{text:'录音在我这里。\\n正确台词。'});clearScript();await applyScriptResult(parsed,'提醒回归.txt');replaceCues([{start:.1,end:.8,text:'录音在我这里',words:[{word:'里',start:.9,end:.8}],alignment:{engine:'fixture'}},{start:.9,end:1.3,text:'正确台词',is_noise:true,needs_review:true},{start:1.4,end:1.8,text:'完全无关的内容'}],{reset:true});if(!await matchScript(true))return 'matchScript false';const rows=[...document.querySelectorAll('#cueBody tr[data-i]')];const verifyOk=state.cues.length===3&&state.cues[0].text==='录音在我这里'&&state.cues[0].words.length===0&&!!state.cues[0].word_timing_error&&rows[0].querySelector('.badge.noise')?.textContent==='明显错误'&&rows[1].querySelector('.badge.verified')?.textContent==='校准通过'&&!rows[1].querySelector('.badge.noise')&&rows[2].querySelector('.badge.noise')?.textContent==='明显错误';state.cues[0].verification_stage='align';renderAll();const aligned=[...document.querySelectorAll('#cueBody tr[data-i]')];const ok=verifyOk&&aligned[0].querySelector('.badge.noise')?.textContent==='明显错误';if(!ok){const hex=s=>[...String(s||'')].map(c=>c.codePointAt(0).toString(16)).join(',');return JSON.stringify({verifyOk,badges:rows.map(r=>hex(r.querySelector('.badges')?.textContent)),aligned:hex(aligned[0].querySelector('.badges')?.textContent),stage:state.cues[0].verification_stage,words:state.cues[0].words?.length,wte:!!state.cues[0].word_timing_error,status:state.cues.map(c=>c.reference_match?.status),stages:state.cues.map(c=>c.verification_stage),labels:state.cues.map(c=>hex(computeCueVerification(c)?.label))});}window.__dirtyTrail=[];const originalSchedule=scheduleSave;scheduleSave=function(){window.__dirtyTrail.push(new Error().stack);return originalSchedule.apply(this,arguments)};const saved=await saveAll();scheduleSave=originalSchedule;return saved?'OK':JSON.stringify({dirty:state.dirty,conflict:projectConflicts.has(projectPath()),save:document.querySelector('#topSaveState')?.textContent,toast:toastEl.textContent,revision:state.editRevision,trail:window.__dirtyTrail,versions:[...projectVersions.entries()]})})()")
+            diag = cdp.evaluate("(async()=>{const parsed=await api('/api/script/parse',{text:'录音在我这里。\\n正确台词。'});clearScript();await applyScriptResult(parsed,'提醒回归.txt');replaceCues([{start:.1,end:.8,text:'录音在我这里',words:[{word:'里',start:.9,end:.8}],alignment:{engine:'fixture'}},{start:.9,end:1.3,text:'正确台词',is_noise:true,needs_review:true},{start:1.4,end:1.8,text:'完全无关的内容'}],{reset:true});if(!await matchScript(true))return 'matchScript false';const rows=[...document.querySelectorAll('#cueBody tr[data-i]')];const verifyOk=state.cues.length===3&&state.cues[0].text==='录音在我这里'&&state.cues[0].words.length===0&&!!state.cues[0].word_timing_error&&rows[0].querySelector('.badge[data-stage=alignment][data-status=unchecked]')?.textContent==='尚未对齐'&&rows[1].querySelector('.badge.verified')?.textContent==='校验通过'&&!rows[1].querySelector('.badge.noise')&&rows[2].querySelector('.badge.noise')?.textContent==='明显错误';state.cues[0].verification_stage='align';renderAll();const aligned=[...document.querySelectorAll('#cueBody tr[data-i]')];const ok=verifyOk&&aligned[0].querySelector('.badge[data-stage=alignment][data-status=unchecked]')?.textContent==='尚未对齐';if(!ok){const hex=s=>[...String(s||'')].map(c=>c.codePointAt(0).toString(16)).join(',');return JSON.stringify({verifyOk,badges:rows.map(r=>hex(r.querySelector('.badges')?.textContent)),aligned:hex(aligned[0].querySelector('.badges')?.textContent),stage:state.cues[0].verification_stage,words:state.cues[0].words?.length,wte:!!state.cues[0].word_timing_error,status:state.cues.map(c=>c.reference_match?.status),stages:state.cues.map(c=>c.verification_stage),labels:state.cues.map(c=>hex(computeCueVerification(c)?.label))});}window.__dirtyTrail=[];const originalSchedule=scheduleSave;scheduleSave=function(){window.__dirtyTrail.push(new Error().stack);return originalSchedule.apply(this,arguments)};const saved=await saveAll();scheduleSave=originalSchedule;return saved?'OK':JSON.stringify({dirty:state.dirty,conflict:projectConflicts.has(projectPath()),save:document.querySelector('#topSaveState')?.textContent,toast:toastEl.textContent,revision:state.editRevision,trail:window.__dirtyTrail,versions:[...projectVersions.entries()]})})()")
             assert diag == 'OK', diag
             diag = cdp.evaluate("""(async()=>{
               setMode('align');clearScript();state.settings.width=20;syncSettingsUI();
@@ -581,7 +586,7 @@ def main():
               replaceCues([{start:.1,end:.9,text:'我们明天去公圆散步'}],{reset:true});
               if(!await matchScript(true))return 'matchScript false';
               let row=document.querySelector('#cueBody tr[data-i="0"]');
-              if(row.querySelector('.badge.low')?.textContent!=='轻微错误')return 'setup badge '+row.querySelector('.badges')?.textContent;
+              if(row.querySelector('.badge.low')?.textContent!=='疑似问题')return 'setup badge '+row.querySelector('.badges')?.textContent;
               let cell=row.querySelector('.cue-text');
               cell.focus();cell.innerText='我们明天去公园散步';cell.dispatchEvent(new Event('input',{bubbles:true}));cell.blur();
               row=document.querySelector('#cueBody tr[data-i="0"]');
@@ -602,7 +607,7 @@ def main():
               cell=row.querySelector('.cue-text');
               cell.focus();cell.innerText='我们明天去公园里散步';cell.dispatchEvent(new Event('input',{bubbles:true}));cell.blur();
               row=document.querySelector('#cueBody tr[data-i="0"]');
-              if(row.querySelector('.badge[data-stage=calibration][data-status=passed]')?.textContent!=='校准通过')return 'edit2 badge '+row.querySelector('.badges')?.textContent;
+              if(row.querySelector('.badge[data-stage=calibration][data-status=suspect]')?.textContent!=='疑似问题')return 'edit2 badge '+row.querySelector('.badges')?.textContent;
               if(state.cues[0].modification_complete?.text!==state.cues[0].text)return 'edit2 snapshot';
               if(!await matchScript(true))return 'recheck false';
               row=document.querySelector('#cueBody tr[data-i="0"]');
@@ -610,7 +615,7 @@ def main():
               if(state.cues[0].modification_complete?.text!==state.cues[0].text)return 'recheck lost manual confirmation';
               const label=computeCueVerification(state.cues[0])?.label;
               if(label!=='修改通过')return 'recheck label '+label;
-              if(!row.querySelector('.badge[data-stage=calibration][data-status=passed]'))return 'recheck lost modified-done';
+              if(!row.querySelector('.badge[data-stage=calibration][data-status=suspect]'))return 'recheck lost reference mismatch warning';
               return await saveAll()?'OK':'saveAll false';
             })()""")
             assert diag == 'OK', diag
@@ -680,7 +685,7 @@ def main():
             assert cdp.evaluate("document.querySelector('#verificationReportDialog').open&&document.querySelector('#reportAfterPassed').textContent!==''")
             cdp.evaluate("document.querySelector('#verificationReportDialog').close();confirmDialog=window.__confirmBeforeRealign")
             results.append({'name':'two_row_toolbar_has_larger_buttons_recognition_in_both_modes_and_global_realign','passed':True})
-            assert cdp.evaluate("(async()=>{replaceCues([{start:.1,end:.5,text:'一般疑点',reference_match:{status:'unmatched',query_text:'一般疑点',label:'无参考内容'}},{start:.7,end:1.2,text:'明显错误',reference_match:{status:'context_mismatch',query_text:'明显错误',warning:'上下文明确不符'}}],{reset:true});renderAll();const rows=[...document.querySelectorAll('#cueBody tr[data-i]')];if(rows[0].querySelector('.badge.noise')?.textContent!=='明显错误'||rows[1].querySelector('.badge.noise')?.textContent!=='明显错误')return false;const cell=rows[1].querySelector('.cue-text');cell.focus();cell.innerText='已修正文本';cell.dispatchEvent(new Event('input',{bubbles:true}));cell.blur();const badges=rows[1].querySelector('.badges');return badges.querySelector('[data-stage=calibration][data-status=passed]')?.textContent==='校准通过'&&!badges.textContent.includes('轻微错误')&&!badges.textContent.includes('明显错误')&&!badges.textContent.includes('待重新校验')&&!badges.textContent.includes('已完成')})()")
+            assert cdp.evaluate("(async()=>{replaceCues([{start:.1,end:.5,text:'一般疑点',content_stage:'verify',reference_match:{status:'unmatched',query_text:'一般疑点',label:'无参考内容'}},{start:.7,end:1.2,text:'明显错误',content_stage:'verify',script_text:'已修正文本',reference_match:{status:'context_mismatch',query_text:'明显错误',warning:'上下文明确不符',reference:{text:'已修正文本'}}}],{reset:true});renderAll();const rows=[...document.querySelectorAll('#cueBody tr[data-i]')];if(rows[0].querySelector('.badge.noise')?.textContent!=='明显错误'||rows[1].querySelector('.badge.noise')?.textContent!=='明显错误')return false;const cell=rows[1].querySelector('.cue-text');cell.focus();cell.innerText='已修正文本';cell.dispatchEvent(new Event('input',{bubbles:true}));cell.blur();const badges=rows[1].querySelector('.badges');return badges.querySelector('[data-stage=calibration][data-status=passed]')?.textContent==='校准通过'&&!badges.textContent.includes('疑似问题')&&!badges.textContent.includes('明显错误')&&!badges.textContent.includes('待重新校验')&&!badges.textContent.includes('已完成')})()")
             cdp.evaluate("hideTip();toastEl.classList.remove('show');document.querySelector('.right .table-wrap').scrollTop=0")
             (args.output/'界面_两排工具与提醒.png').write_bytes(base64.b64decode(cdp.call('Page.captureScreenshot',{'format':'png'})['data']))
             results.append({'name':'yellow_suspect_red_obvious_and_green_modified_done_replace_old_labels','passed':True})
@@ -735,7 +740,7 @@ def main():
             results.append({'name':'explicit_timing_preview_apply_export_and_undo_share_actual_times','passed':True})
             assert cdp.evaluate("""(()=>{
               Object.assign(state.settings,{subtitleLead:0,subtitleTail:0,subtitleMin:0,subtitleMax:0});
-              replaceCues([{text:'确认台词',start:.1,end:1,edited:true,alignment:{engine:'fixture'},alignment_error:'无法定位音轨',verification_stage:'align'}],{reset:true});
+              replaceCues([{text:'确认台词',manual_reference:'确认台词',content_stage:'calibrate',start:.1,end:1,edited:true,alignment:{engine:'fixture'},alignment_error:'无法定位音轨',verification_stage:'align'}],{reset:true});
               state.filter='obvious';state.search='';renderAll();
               const row=document.querySelector('#cueBody tr');
               if(!row?.querySelector('.badge.noise')||!row.querySelector('.badge[data-stage=calibration][data-status=passed]'))return false;

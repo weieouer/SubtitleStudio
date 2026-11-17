@@ -21,6 +21,17 @@ def curve(length, runs):
 
 
 class VadPrimitiveTests(unittest.TestCase):
+    def test_one_noise_run_cannot_confirm_edge_against_multiple_interior_words(self):
+        words=[{'word':'你','start':.064,'end':.19},{'word':'们','start':.7,'end':.82},
+               {'word':'回','start':.85,'end':1.},{'word':'家','start':1.02,'end':1.18}]
+        frames=curve(50,[(2,6,.9),(21,39,.9)])
+        self.assertTrue(boundaries._boundary_context_conflict(frames,0.,words))
+        self.assertFalse(boundaries._context_supports_edge(.064,.192,words))
+        self.assertTrue(boundaries._context_supports_edge(.672,1.248,words))
+        mirror=[{**w,'start':2.-w['end'],'end':2.-w['start']} for w in reversed(words)]
+        mirrored_frames=curve(65,[(23,41,.9),(57,61,.9)])
+        self.assertTrue(boundaries._boundary_context_conflict(mirrored_frames,0.,mirror,at_end=True))
+
     def test_both_edges_can_trim_when_interior_words_support_same_speech_run(self):
         audio=np.zeros(16000*3)
         words=[{'word':'你好','start':0.,'end':.8},{'word':'世界','start':.8,'end':2.}]
@@ -163,6 +174,41 @@ class VadPrimitiveTests(unittest.TestCase):
 
 
 class VadIntegrationTests(unittest.TestCase):
+    def test_real_pause_after_short_opening_keeps_words_for_pause_split(self):
+        from core.segment import split_on_gaps
+        cue={'text':'守住！援军赶来','start':0.,'end':1.84,'alignment':{'engine':'test'},
+             'words':[{'word':t,'start':a,'end':b} for t,a,b in
+                      [('守',0.,.16),('住',.16,.4),('援',1.2,1.36),('军',1.36,1.52),('赶',1.52,1.68),('来',1.68,1.84)]],
+             'reference_match':{'status':'high','query_text':'守住！援军赶来','reference':{'text':'守住！援军赶来'}}}
+        with patch.object(boundaries,'_vad_region',return_value=(0.,curve(100,[(6,20,.9),(38,59,.9)]))):
+            result=self._refine(cue)[0]
+        self.assertNotIn('alignment_error',result)
+        self.assertIn('alignment_warning',result)
+        self.assertEqual(result['words'],cue['words'])
+        pieces,count=split_on_gaps([result],.3,16)
+        self.assertEqual(count,1)
+        self.assertEqual([c['text'] for c in pieces],['守住！','援军赶来'])
+        self.assertEqual((pieces[0]['end'],pieces[1]['start']),(.4,1.2))
+
+    def test_failed_neighbour_does_not_cut_successful_first_or_last_word(self):
+        from core.alignment import _resolve_overlaps
+        for at_end in [False,True]:
+            with self.subTest(at_end=at_end):
+                good={'text':'正常台词','start':1.,'end':2.,'alignment':{'engine':'test'},
+                      'words':[{'word':'正常台词','start':1.,'end':2.}]}
+                bad={'text':'定位失败','start':1.88 if at_end else 0.,'end':3. if at_end else 1.12,
+                     'alignment_error':'无法定位','alignment':{'stale':True},'words':[]}
+                cues=[good,bad] if at_end else [bad,good]
+                threshold={'on':.1,'off':.05,'noise_floor':.001,'dead_zone':.001,'voice':.2}
+                with patch.object(boundaries,'speech_intervals',return_value=([(0.,3.)],threshold)), \
+                     patch.object(boundaries,'_vad_region',return_value=(None,None)):
+                    result=refine_boundaries(deepcopy(cues),np.zeros(16000*4,dtype=np.float32))
+                result=_resolve_overlaps(result,[(c['start'],c['end']) for c in cues])
+                actual=result[0 if at_end else 1]
+                self.assertEqual((actual['start'],actual['end']),(1.,2.))
+                self.assertEqual(actual['words'],good['words'])
+                self.assertNotIn('alignment_error',actual)
+
     def test_short_tail_word_missed_by_vad_keeps_words_and_marks_existing_warning(self):
         cue={'text':'回家吧','start':.1,'end':1.,'alignment':{'engine':'test'},
              'words':[{'word':'回家','start':.1,'end':.7},

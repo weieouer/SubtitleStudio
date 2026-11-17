@@ -256,9 +256,39 @@ def effective_minimum(length: int, options: dict) -> float:
 
 
 @lru_cache(maxsize=1)
+def dialogue_prefixes(raw):
+    """只屏蔽明确的角色前缀，保留原文坐标；冒号、引号后的文字仍是对白。"""
+    pattern=re.compile(r'(?m)(?:^|(?<=[”」』"。！？!?；;]))[ \t]*(?P<role>[^\n\r:：,，。！？!?；;“”「」『』"…]{1,24})[：:][ \t]*')
+    reserved={'时间','日期','地点','场景','镜头','画面','音效','BGM','备注','注意','提示','说明','例如','比如','原因','结果','答案','价格','网址','比例'}
+    spans=[]
+    for match in pattern.finditer(raw):
+        role=match['role'].strip()
+        following=raw[match.end():match.end()+1]
+        if (role in reserved or role.upper() in {'HTTP','HTTPS','FTP','TIME','LOCATION','SCENE','NOTE','SFX','BGM'}
+                or re.match(r'第.{0,10}[集场幕]',role)):continue
+        if role.isdigit() or (role.isascii() and any(c.isdigit() for c in role)):continue
+        quoted=following in ('"','“','「','『')
+        named=((1<=len(role)<=4 and all('\u3400'<=c<='\u9fff' for c in role))
+               or (len(role)<=16 and role.isascii() and role.replace(' ','').isalpha()))
+        annotated=bool(re.fullmatch(r'[\u3400-\u9fffA-Za-z·]{1,12}[（(][^()（）]{1,12}[）)]',role))
+        if quoted or named or annotated:
+            spans.append((match.start('role'),match.end()))
+    return tuple(spans)
+
+
+@lru_cache(maxsize=1)
 def _index_features(digest, raw):
     """只缓存一份全文的不可变检索特征；阈值、来源边界和查询缓存按请求隔离。"""
-    text,positions=normalized(raw);phonetic=pinyin_tokens(text)
+    prefixes=dialogue_prefixes(raw)
+    searchable=raw
+    if prefixes:
+        pieces=[];cursor=0
+        for start,end in prefixes:
+            pieces.extend((raw[cursor:start],' '*(end-start)));cursor=end
+        pieces.append(raw[cursor:]);searchable=''.join(pieces)
+    # 等长屏蔽后再标准化，避免“张三：三个人”中的两个“三”先被合并换算。
+    text,positions=normalized(searchable)
+    phonetic=pinyin_tokens(text)
     grams,pygrams=defaultdict(list),defaultdict(list)
     for i in range(max(0,len(text)-1)):
         grams[text[i:i+2]].append(i);pygrams[phonetic[i:i+2]].append(i)
@@ -338,6 +368,8 @@ class ReferenceIndex:
             self.index_cache_hit=_index_features.cache_info().hits>before
         self.index_seconds=time.perf_counter()-started
         self.sources=document['sources']
+        self.dialogue_prefixes=dialogue_prefixes(self.raw)
+        self.dialogue_prefix_starts=[a for a,b in self.dialogue_prefixes]
         self.source_starts=[s['start'] for s in self.sources]
         self.source_ranges=[(bisect_left(starts,s['start']),bisect_right(ends,s['end'])) for s in self.sources]
         self.lower=bisect_left(starts,position_bounds[0]) if position_bounds else 0
@@ -377,6 +409,9 @@ class ReferenceIndex:
 
     def source_index(self,start,end):
         raw_start,raw_end=self.positions[start][0],self.positions[end-1][1]
+        boundary=bisect_right(self.dialogue_prefix_starts,raw_start)
+        if boundary<len(self.dialogue_prefix_starts) and self.dialogue_prefix_starts[boundary]<raw_end:
+            return None
         sid=max(0,bisect_right(self.source_starts,raw_start)-1)
         if raw_end>self.sources[sid]['end']:return None
         # 不允许候选截断同一个原字簇的一对多标准化副本。
@@ -398,6 +433,12 @@ class ReferenceIndex:
         pend = max(pstart, bisect_right(self.starts, max(raw_start, raw_end - 1)) - 1)
         lines = self.paragraphs[pstart:pend + 1]
         risk = any(NARRATION.search(p["text"]) or ACTION.search(p["text"]) for p in lines)
+        # 角色括号中的动作不污染其后的对白；仍不允许跨到下一位说话人。
+        prefix=bisect_right(self.dialogue_prefix_starts,raw_start)-1
+        if prefix>=0 and self.dialogue_prefixes[prefix][1]<=raw_start:
+            after=self.dialogue_prefixes[prefix][1]
+            if '\n' not in self.raw[after:raw_start] and '\r' not in self.raw[after:raw_start]:
+                risk=bool(NARRATION.search(self.raw[raw_start:raw_end]))
         # 明确的格式标签跨在片段中时不能把人物名一起建议为字幕。
         if re.search(r"\n\s*[^\n：:]{1,16}[：:]", self.raw[raw_start:raw_end]):
             risk = True

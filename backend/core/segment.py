@@ -408,8 +408,13 @@ def _gap_has_audio_support(cue: dict, prev: dict, word: dict, min_gap: float) ->
 
     连续说话时模型词时间也可能给出几百毫秒的空档；如果边界精修已经生成了
     audio_silences 证据，却在该空档里找不到足够长的静音，就不按这个空档切，
-    否则会出现“声波连贯但字幕只剩一两个字”的碎片。
+    否则会出现“声波连贯但字幕只剩一两个字”的碎片。300 毫秒以上的空档
+    已经明显超出词间抖动；背景音乐、呼吸或持续底噪可能让静音检测漏掉它，
+    此时以词时间为准，不能把整段停顿吞掉。
     """
+    gap = float(word['start']) - float(prev['end'])
+    if gap >= max(.3, min_gap):
+        return True
     if 'audio_silences' not in cue:
         return True
     left, right = float(prev['end']), float(word['start'])
@@ -450,8 +455,11 @@ def split_on_gaps(cues: list[dict], min_gap: float = 0.6, max_width: float=20) -
         forced = set()
         reference_context = _reference_break_context(cue) if positions is not None else None
         for wi, (prev, word) in enumerate(zip(words, words[1:]), 1):
+            # 参考里明确是两句话：即使停顿没到阈值、或分词把该处并成一个词，
+            # 也按句界切开；参考里是同一句时，才看停顿和分词边界。
+            ref_break = bool(reference_context and bisect_right(reference_context[0],positions[wi][0][0]) in reference_context[1])
             # 模型可能给逐字时间；词间低能量或真实停顿也不能把“中毒”拆开。
-            if lexical_cuts is not None and positions[wi][0][0] not in lexical_cuts:
+            if not ref_break and lexical_cuts is not None and positions[wi][0][0] not in lexical_cuts:
                 continue
             gap = float(word.get("start", 0)) - float(prev.get("end", 0))
             found = None
@@ -465,14 +473,13 @@ def split_on_gaps(cues: list[dict], min_gap: float = 0.6, max_width: float=20) -
                 if silences:
                     silence = max(silences, key=lambda s: s['end']-s['start'])
                     found = (min(float(prev['end']), silence['start']+.01), float(word['start']))
-            # 参考里明确是两句话：即使停顿没到阈值也按句界切开；
-            # 参考里是同一句：只在停顿达到阈值时拆，否则保留为一条。
-            ref_break = bool(reference_context and bisect_right(reference_context[0],positions[wi][0][0]) in reference_context[1])
             if ref_break is True:
                 forced.add(wi)
                 if found is None:
-                    cut = max(float(prev['end']), float(word['start']))
-                    found = (cut, cut)
+                    # 参考决定拆在哪里，词时间决定两边首尾；有停顿就留空，
+                    # 不能为衔接下一句把前一条延长到后一个词的起点。
+                    left,right=float(prev['end']),float(word['start'])
+                    found = (left,right) if left<=right else (left,left)
             if found is None:
                 continue
             boundaries[wi] = found

@@ -62,6 +62,8 @@ SubtitleStudio/
 
 主模型三选一：FireRedASR2-AED、Whisper large-v3、Qwen3-ASR-1.7B。对齐使用 Qwen3-ForcedAligner-0.6B。模型在界面下载，GPU 环境也按需安装；无需先下载全部模型。GPU/真实对白效果仍需按素材验证。
 
+音效影响句首尾时，可在“辅模”下载“人声分离（对齐辅助）”（约 320 MB）。下载后，对齐会自动分离疑难句的人声并重新核对逐字时间；只有多个词的时间稳定、首尾音效被明显抑制时才采用。普通句子不做分离，不确定的结果继续使用原有复核标签。辅模未下载或分离失败时沿用原声对齐；不会在对齐途中自动下载。权重保存在 `data/models/hdemucs-vocals`，升级安装时随其他模型保留。
+
 工程保存在 `data/projects`，模型位于 `data/models`，引擎环境位于 `data/engines`。Ctrl+S 保存；空格播放/暂停，Ctrl+Z 撤销，Ctrl+Y 重做。素材移动后可能需要重新关联。
 
 ## 发布
