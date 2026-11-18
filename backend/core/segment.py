@@ -164,6 +164,17 @@ def _char_times(text: str, words: list[dict] | None) -> list[tuple[float, float]
     return times
 
 
+def _gap_times(char_times: list, text: str, cut: int):
+    """切点两侧的词时间。空格和换行没有词时间，跳过它们取相邻可计时的字符。"""
+    left = cut - 1
+    while left > 0 and text[left].isspace():
+        left -= 1
+    right = cut
+    while right < len(text) - 1 and text[right].isspace():
+        right += 1
+    return char_times[left], char_times[right]
+
+
 def _estimate_times(text: str, start: float, end: float) -> list[tuple[float, float]]:
     total = text_width(text) or 1.0
     out: list[tuple[float, float]] = []
@@ -247,7 +258,7 @@ def segment_cue(cue: dict, max_width: float = 20.0, *, split_at=None) -> tuple[l
     boundaries = [start_ms]
     total = text_width(text) or 1.0
     for i, (a, _) in enumerate(ranges[1:], 1):
-        left, right = char_times[a - 1], char_times[a]
+        left, right = _gap_times(char_times, text, a)
         if left is not None and right is not None and left[1] <= right[0]:
             boundary = round((left[1] + right[0]) * 500)
         else:
@@ -305,6 +316,42 @@ def segment_cue(cue: dict, max_width: float = 20.0, *, split_at=None) -> tuple[l
     return out, len(out) - 1
 
 
+def _mark_manual(pieces: list[dict], kind: str) -> None:
+    for piece in pieces:
+        piece.update(segmentation=kind, manual_split=True, edited=True, review_complete=False)
+
+
+def segment_at_cursor(cue: dict, split_at, max_width: float=20):
+    """光标处拆成两条：两侧空白和换行不保留；有可靠词时间就沿用，否则标估计待复核。"""
+    text=cue.get('text') or ''
+    if type(split_at) is not int or not 0<split_at<len(text):
+        raise ValueError('请把光标放在字幕文字中间，两边都需要有文字')
+    left_end=split_at
+    while left_end and text[left_end-1].isspace():
+        left_end-=1
+    cut=split_at
+    while cut<len(text) and text[cut].isspace():
+        cut+=1
+    if not text[:left_end].strip() or not text[cut:].strip():
+        raise ValueError('请把光标放在字幕文字中间，两边都需要有文字')
+    if unicodedata.category(text[cut]).startswith('M') or '\u200d' in (text[left_end-1],text[cut]):
+        raise ValueError('请把光标放在完整字符之间')
+    source=dict(cue)
+    if cue.get('alignment_error') or cue.get('word_timing_error') or (cue.get('alignment') or {}).get('stale'):
+        source['words']=[]
+    pieces,count=segment_cue(source,max_width,split_at=cut)
+    if not count:
+        raise ValueError('字幕时间过短，无法在光标处拆成两条')
+    pieces[0]['text']=pieces[0]['text'].rstrip()
+    _mark_manual(pieces,'manual_cursor')
+    for piece in pieces:
+        piece.pop('timing_review',None)
+        if piece.get('estimated'):
+            piece['needs_review']=True
+            piece['alignment']={**(piece.get('alignment') or {}),'stale':True}
+    return pieces,count
+
+
 def segment_midpoint(cue: dict, max_width: float=20):
     """只切当前一条，在中间附近选完整词边界；从不借用下一条字幕。"""
     text=cue.get('text') or '';offset=0;cuts=set()
@@ -322,16 +369,14 @@ def segment_midpoint(cue: dict, max_width: float=20):
           and max(prefix[cut],total-prefix[cut])<=max_width]
     if not cuts:
         pieces,count=segment_cue(cue,max_width)
-        if count:
-            for piece in pieces:piece.update(segmentation='manual_midpoint',manual_split=True,edited=True,review_complete=False)
+        if count:_mark_manual(pieces,'manual_midpoint')
         return pieces,count
     half=total/2;times=_char_times(text,cue.get('words'))
     def cost(cut):
         gap=max(0,times[cut][0]-times[cut-1][1]) if times[cut] and times[cut-1] else 0
         return abs(prefix[cut]-half)-min(.5,gap),cut
     pieces,count=segment_cue(cue,max_width,split_at=min(cuts,key=cost))
-    if count:
-        for piece in pieces:piece.update(segmentation='manual_midpoint',manual_split=True,edited=True,review_complete=False)
+    if count:_mark_manual(pieces,'manual_midpoint')
     return pieces,count
 
 

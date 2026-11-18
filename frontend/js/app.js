@@ -511,26 +511,24 @@ function applyTheme(theme, persist = true) {
     const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     tc.setAttribute("content", dark ? "#111111" : "#ededed");
   }
-  if (typeof drawWave === "function") drawWave();
+  scheduleWaveRedraw();
+}
+
+// 同一帧内多次主题或尺寸变化只重画一次波形。
+let waveFrame = 0;
+function scheduleWaveRedraw() {
+  if (waveFrame) return;
+  waveFrame = requestAnimationFrame(() => { waveFrame = 0; if (typeof drawWave === "function") drawWave(); });
 }
 
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (state.theme === "system") applyTheme("system", false);
 });
 
-function switchTheme(theme, useViewTransition = true) {
+function switchTheme(theme) {
   if (theme === state.theme) return;
-  if (!useViewTransition || !document.startViewTransition || reduceMotion()) {
-    themeRoot.classList.add("theme-changing");
-    applyTheme(theme);
-    window.setTimeout(() => themeRoot.classList.remove("theme-changing"), 320);
-    return;
-  }
-  try {
-    document.startViewTransition(() => applyTheme(theme));
-  } catch {
-    applyTheme(theme);
-  }
+  // 颜色变量即时生效：整页截图淡入和全元素颜色过渡在大表格上会掉帧。
+  applyTheme(theme);
 }
 
 function applyCord(pull) {
@@ -610,14 +608,14 @@ function animateCordSpring(from, velocity) {
 function pulseCord() {
   stopCordMotion();
   if (reduceMotion()) {
-    switchTheme(cordThemeTarget(), false);
+    switchTheme(cordThemeTarget());
     return;
   }
   renderCord(14);
   lampCord.classList.add("is-pulling");
   cordPulseTimer = window.setTimeout(() => {
     cordPulseTimer = 0;
-    switchTheme(cordThemeTarget(), false);
+    switchTheme(cordThemeTarget());
     animateCordSpring(14, -18);
   }, 70);
 }
@@ -667,7 +665,7 @@ function bindThemeControls() {
     }
     cordPointer = null;
     if (!cancelled && cordPull >= CORD_THRESHOLD) {
-      switchTheme(cordThemeTarget(), false);
+      switchTheme(cordThemeTarget());
       animateCordSpring(cordPull, cordVelocity);
     } else if (!cancelled && !wasMoved) {
       pulseCord();
@@ -1063,10 +1061,16 @@ function bindSplitters() {
     });
   });
 
+  // 窗口拖动会连续触发 resize：每帧只做一次布局与波形重绘。
+  let resizeFrame = 0;
   window.addEventListener("resize", () => {
-    if (windowIsMaximized() !== state.windowMaximized) resetPanelWidths();
-    else applyLayout();
-    drawWave();
+    if (resizeFrame) return;
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = 0;
+      if (windowIsMaximized() !== state.windowMaximized) resetPanelWidths();
+      else applyLayout();
+      drawWave();
+    });
   });
 }
 
@@ -3212,8 +3216,58 @@ async function rerunSelected() {
 }
 
 // ---------- 分段/编辑操作 ----------
-async function doSegment() {
-  const selected = selectedCueIndices();
+// 把 Range 还原成文字：<br> 和块级元素按换行计，与 innerText 的换行一致（Shift+回车产生 <br>）。
+function rangeText(range) {
+  let text='';
+  const walk=node=>{
+    if(node.nodeType===3){text+=node.data;return;}
+    if(node.nodeName==='BR'){text+='\n';return;}
+    if((node.nodeName==='DIV'||node.nodeName==='P')&&text&&!text.endsWith('\n'))text+='\n';
+    node.childNodes.forEach(walk);
+  };
+  walk(range.cloneContents());
+  return text;
+}
+// 光标两侧文字与显示文字比对：显示层会隐藏标点、转换简繁和数字，只接受能精确对应的原文位置。
+// 同一可见位置可能夹在隐藏标点两侧，取最后一个，让标点留在左侧；两侧比较都忽略首尾空白。
+function cursorSplitOffset(text,prefix,suffix) {
+  const left=prefix.trim(),right=suffix.trim();
+  if(!left||!right)return null;
+  const chars=[...String(text??'')];
+  let cut=null;
+  for(let i=1;i<chars.length;i++){
+    if(editableCueText(chars.slice(0,i).join('')).trim()!==left)continue;
+    if(editableCueText(chars.slice(i).join('')).trim()===right)cut=i;
+  }
+  return cut;
+}
+
+async function splitCueAtCaret(cell) {
+  const row=cell.closest('tr[data-i]'),index=Number(row?.dataset.i),cue=state.cues[index];
+  const selection=window.getSelection();
+  const caret=selection?.rangeCount?selection.getRangeAt(0):null;
+  // 编辑被锁定或无法定位光标时，回车照旧结束编辑，不吞掉按键。
+  if(editLocked()||!cue||!caret||!cell.contains(caret.startContainer)){cell.blur();return;}
+  const head=document.createRange(),tail=document.createRange();
+  head.selectNodeContents(cell);head.setEnd(caret.startContainer,caret.startOffset);
+  tail.selectNodeContents(cell);tail.setStart(caret.startContainer,caret.startOffset);
+  const prefix=rangeText(head),suffix=rangeText(tail);
+  // 光标在首尾、一侧没有文字时没有可拆的内容，回车照旧结束编辑。
+  if(!prefix.trim()||!suffix.trim()){cell.blur();return;}
+  const cut=cursorSplitOffset(cue.text,prefix,suffix);
+  if(cut===null){toast('请把光标放在完整文字之间；数字请在整个数字前后分段','info');return;}
+  cell.blur();
+  if(!await doSegment({index,splitAt:cut}))return;
+  const next=cueBody.querySelector(`tr[data-i="${index+1}"] .cue-text`);
+  if(next){
+    next.focus();const range=document.createRange();range.selectNodeContents(next);range.collapse(true);
+    selection.removeAllRanges();selection.addRange(range);
+  }
+}
+
+async function doSegment(options={}) {
+  const cursor=Number.isInteger(options.splitAt);
+  const selected = cursor?[options.index]:selectedCueIndices();
   if (editLocked() || selected.length !== 1) return;
   const index = selected[0], original = state.cues[index];
   const start = Number(original.start), end = Number(original.end);
@@ -3222,7 +3276,8 @@ async function doSegment() {
   const path=projectPath(),epoch=state.mediaEpoch;
   state.operation='分段';updateButtons();
   try{
-    const result=await api('/api/segment',{cues:[original],max_width:state.settings.width,mode:'midpoint'});
+    const result=await api('/api/segment',{cues:[original],max_width:state.settings.width,
+      mode:cursor?'cursor':'midpoint',...(cursor?{split_at:options.splitAt}:{})});
     if(!sameDocument(path,epoch,before))throw new Error('字幕已变化，已保留当前内容');
     if(!result.splits){toast('没有可拆开的完整词边界，已保留原句','info');return;}
     result.cues.forEach(cue=>completeModification(cue));
@@ -3232,7 +3287,8 @@ async function doSegment() {
       const missing=result.cues.map((cue,i)=>cue.reference_match?-1:index+i).filter(i=>i>=0);
       if(missing.length)await rematchDerivedCues(missing,{preserveModification:true});
     }
-    toast('已在中间附近独立分段，后面的原字幕保持不变','success');
+    toast(cursor?'已从光标处分段'+(result.estimated?'，时间为估计，请试听或重新对齐':''):'已在中间附近独立分段，后面的原字幕保持不变','success');
+    return true;
   }catch(error){toast(error.message,'error');}
   finally{state.operation='';updateButtons();}
 }
@@ -4052,7 +4108,7 @@ function bindEvents() {
   });
   $("#waveReset").addEventListener("click", () => { state.waveSpan = 0; state.waveStart = 0; requestWaveDetail(); });
 
-  $("#btnSegment").addEventListener("click", doSegment);
+  $("#btnSegment").addEventListener("click", () => doSegment());
   $("#btnMerge").addEventListener("click", doMerge);
   $("#btnAddCue").addEventListener("click", addCue);
   $('#btnCancelAddCue').addEventListener('click',()=>$('#addCueDialog').close());
@@ -4310,10 +4366,12 @@ function bindEvents() {
   });
 
   cueBody.addEventListener("keydown", (e) => {
+    if(e.isComposing||e.keyCode===229)return;
     if (e.target.matches('.cue-text, .cue-reference')) {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        e.target.blur();
+        if(e.target.matches('.cue-text')&&!e.ctrlKey&&!e.altKey&&!e.metaKey)splitCueAtCaret(e.target);
+        else e.target.blur();
       } else if (e.key === "Escape") {
         e.preventDefault();
         if (state.editBefore) restoreSnapshot(state.editBefore);

@@ -67,6 +67,11 @@ MAX_UPLOAD = 20 * 1024 ** 3
 MAX_GAP_SECONDS = 2.0
 MIN_WIDTH = 6.0
 MAX_WIDTH = 30.0
+# 只处理一条字幕的手动分段：请求 mode -> (错误提示用名称, 分段函数)
+SINGLE_CUE_SPLITS = {
+    'midpoint': ('中间分段', lambda cue, body, width: segment.segment_midpoint(cue, width)),
+    'cursor': ('光标分段', lambda cue, body, width: segment.segment_at_cursor(cue, body.get('split_at'), width)),
+}
 JOBS = JobManager()
 MATCH_TASKS = MatchTasks()
 
@@ -832,13 +837,17 @@ class Handler(BaseHTTPRequestHandler):
         max_width = validation.number(body.get("max_width", 20), "每行宽度", MIN_WIDTH, MAX_WIDTH)
         if not (MIN_WIDTH <= max_width <= MAX_WIDTH):
             raise ValueError(f"每行宽度需在 {MIN_WIDTH:g}-{MAX_WIDTH:g} 之间")
-        if body.get('mode')=='midpoint':
-            if len(cues)!=1:raise ValueError('中间分段一次只处理一条字幕')
-            result,splits=segment.segment_midpoint(cues[0],max_width)
-            self.send_json({'ok':True,'cues':result,'splits':splits,'gap_splits':0,
-                            'estimated':sum(bool(c.get('estimated')) for c in result),'count':len(result)})
+        mode = body.get('mode')
+        single = SINGLE_CUE_SPLITS.get(mode) if isinstance(mode, str) else None
+        if single:
+            label, split = single
+            if len(cues) != 1:
+                raise ValueError(f'{label}一次只处理一条字幕')
+            result, splits = split(cues[0], body, max_width)
+            self.send_json({'ok': True, 'cues': result, 'splits': splits, 'gap_splits': 0,
+                            'estimated': sum(bool(c.get('estimated')) for c in result), 'count': len(result)})
             return
-        if body.get('mode')=='calibration':
+        if mode=='calibration':
             from core.calibration import normalize_cues
             keep_punc = validation.boolean(body.get('keep_punc', True), '标点符号')
             fingerprint = body.get('reference_fingerprint') or None

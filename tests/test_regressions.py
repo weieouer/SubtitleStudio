@@ -32,6 +32,54 @@ def cue(text="你好", start=0, end=1, **extra):
 
 
 class CoreTests(unittest.TestCase):
+    def test_cursor_split_preserves_word_gap_text_and_asr_history(self):
+        original={'text':'东西拿到了？','start':1.,'end':3.,'asr_original':{'text':'原始记录','start':0.,'end':4.},
+                  'words':[{'word':'东西','start':1.,'end':1.4},{'word':'拿到了','start':2.,'end':3.}]}
+        before=copy.deepcopy(original)
+        pieces,count=segment.segment_at_cursor(original,2,20)
+        self.assertEqual(count,1)
+        self.assertEqual([c['text'] for c in pieces],['东西','拿到了？'])
+        self.assertEqual((pieces[0]['end'],pieces[1]['start']),(1.4,2.))
+        self.assertTrue(all(c['manual_split'] for c in pieces))
+        self.assertTrue(all(c['asr_original']==before['asr_original'] for c in pieces))
+        self.assertEqual(original,before)
+
+    def test_cursor_split_missing_or_stale_words_never_claims_precise_alignment(self):
+        for words in [[],[{'word':'你好世界','start':0.,'end':4.}]]:
+            with self.subTest(words=words):
+                original={'text':'你好世界','start':0.,'end':4.,'words':words,'alignment':{'stale':True},
+                          'timing_review':{'text':'你好世界','start':0.,'end':4.,'source':'model'}}
+                pieces,count=segment.segment_at_cursor(original,2)
+                self.assertEqual(count,1)
+                self.assertEqual([c['text'] for c in pieces],['你好','世界'])
+                self.assertTrue(all(c['estimated'] and c['needs_review'] and c['alignment']['stale'] for c in pieces))
+                self.assertTrue(all(not c['words'] and 'timing_review' not in c for c in pieces))
+
+    def test_cursor_split_unicode_and_empty_edges(self):
+        pieces,count=segment.segment_at_cursor({'text':'甲😀乙丙','start':0.,'end':2.},2)
+        self.assertEqual(count,1);self.assertEqual([c['text'] for c in pieces],['甲😀','乙丙'])
+        for offset in [None,True,0,-1,4,1.5]:
+            with self.subTest(offset=offset),self.assertRaises(ValueError):
+                segment.segment_at_cursor({'text':'甲乙丙丁','start':0.,'end':2.},offset)
+        with self.assertRaises(ValueError):segment.segment_at_cursor({'text':'a\u0301乙','start':0.,'end':2.},1)
+
+    def test_cursor_split_drops_line_breaks_at_cut_and_keeps_neighbour_timing(self):
+        # Shift+回车的换行只充当切点：不留在任何一条字幕里，两侧沿用相邻词的时间。
+        original={'text':'甲乙'+chr(10)+'丙丁','start':0.,'end':5.,
+                  'words':[{'word':'甲','start':0.,'end':1.},{'word':'乙','start':1.,'end':2.},
+                           {'word':'丙','start':3.,'end':4.},{'word':'丁','start':4.,'end':5.}]}
+        pieces,count=segment.segment_at_cursor(original,3,20)
+        self.assertEqual(count,1)
+        self.assertEqual([c['text'] for c in pieces],['甲乙','丙丁'])
+        self.assertEqual((pieces[0]['end'],pieces[1]['start']),(2.5,2.5))
+        self.assertFalse(any(c.get('estimated') for c in pieces))
+
+    def test_cursor_split_needs_text_on_both_sides_and_enough_time(self):
+        with self.assertRaises(ValueError):
+            segment.segment_at_cursor({'text':'甲'+chr(10)+chr(10),'start':0.,'end':2.},2)
+        with self.assertRaisesRegex(ValueError,'时间过短'):
+            segment.segment_at_cursor({'text':'甲乙丙丁','start':0.,'end':0.001},2)
+
     def test_non_overwrite_export_retries_collision_and_never_truncates(self):
         with tempfile.TemporaryDirectory() as folder:
             media = Path(folder) / '视频.mp4'
@@ -318,6 +366,15 @@ class HttpTests(unittest.TestCase):
                 self.assertEqual(int(headers["Content-Length"]), len(raw))
                 if header == "bytes=-100":
                     self.assertEqual(raw, self.binary.read_bytes()[-100:])
+
+    def test_cursor_split_api_uses_exact_character_offset(self):
+        body={'mode':'cursor','split_at':2,'cues':[cue('甲😀乙丙',0,2)],'max_width':16}
+        status,result=self.json_request('POST','/api/segment',body)
+        self.assertEqual(status,200);self.assertEqual(result['splits'],1)
+        self.assertEqual([c['text'] for c in result['cues']],['甲😀','乙丙'])
+        for value in [None,True,0,4,1.5,'2']:
+            with self.subTest(value=value):
+                self.assertEqual(self.json_request('POST','/api/segment',{**body,'split_at':value})[0],400)
 
     def test_calibration_api_copies_reference_only_and_rejects_invalid_gap(self):
         matched = cue('中毒的人', .2, 1)

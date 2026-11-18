@@ -295,6 +295,56 @@ export async function runFrontendTests(source) {
     assert.equal(ctx.state.cues[0].end,ctx.state.cues[1].start);assert.equal(ctx.state.operation,'');
   });
 
+  await test('cursor_split_maps_unicode_hidden_punctuation_and_rejects_empty_edges',async()=>{
+    const ctx=make({editableCueText:value=>String(value).replace(/[，。]/g,'')},['cursorSplitOffset']);
+    assert.equal(ctx.cursorSplitOffset('你好，世界。','你好','世界'),3);
+    assert.equal(ctx.cursorSplitOffset('甲😀乙丙','甲😀','乙丙'),2);
+    assert.equal(ctx.cursorSplitOffset('你好','', '你好'),null);
+    assert.equal(ctx.cursorSplitOffset('你好','你好',''),null);
+  });
+  await test('cursor_split_treats_line_break_as_cut_and_rangeText_matches_innerText',async()=>{
+    const NL=String.fromCharCode(10);
+    const ctx=make({editableCueText:value=>String(value).replace(/[，。]/g,'')},['cursorSplitOffset','rangeText']);
+    assert.equal(ctx.cursorSplitOffset('甲'+NL+'乙','甲'+NL,'乙'),2);
+    const text=data=>({nodeType:3,data}),el=(nodeName,...childNodes)=>({nodeType:1,nodeName,childNodes});
+    const fragment={nodeType:11,nodeName:'#document-fragment',childNodes:[text('甲'),el('BR'),text('乙'),el('DIV',text('丙'))]};
+    assert.equal(ctx.rangeText({cloneContents:()=>fragment}),'甲'+NL+'乙'+NL+'丙');
+  });
+  await test('enter_at_cue_edges_only_finishes_editing_and_middle_splits_at_caret',async()=>{
+    const run=async(headText,tailText,cueText)=>{
+      const calls=[];let blurs=0;
+      const cell={closest:()=>({dataset:{i:'0'}}),contains:()=>true,blur:()=>{blurs++;}};
+      // 每次 createRange 返回独立 Range：head 取前半段文字，tail 取后半段文字。
+      const makeRange=()=>{let side='head';return {selectNodeContents(){},setEnd(){side='head';},setStart(){side='tail';},
+        cloneContents:()=>({nodeType:11,nodeName:'#document-fragment',childNodes:[{nodeType:3,data:side==='head'?headText:tailText}]})};};
+      const selection={rangeCount:1,getRangeAt:()=>({startContainer:cell,startOffset:0}),removeAllRanges(){},addRange(){}};
+      const ctx=make({editableCueText:value=>String(value),window:{getSelection:()=>selection},
+        document:{createRange:makeRange,activeElement:{blur(){}}},
+        doSegment:async options=>{calls.push(options);return true;}},['splitCueAtCaret','rangeText','cursorSplitOffset']);
+      ctx.state.cues=[{text:cueText,start:0,end:1}];
+      await ctx.splitCueAtCaret(cell);
+      return {calls,blurs};
+    };
+    const plain=value=>JSON.parse(JSON.stringify(value));
+    assert.deepEqual(plain(await run('','世界','你好世界')),{calls:[],blurs:1});
+    assert.deepEqual(plain(await run('你好','','你好世界')),{calls:[],blurs:1});
+    assert.deepEqual(plain(await run('你好','世界','你好世界')),{calls:[{index:0,splitAt:2}],blurs:1});
+  });
+  await test('cursor_split_targets_editing_row_and_undo_restores_unsplit_text',async()=>{
+    const ctx=make({api:async(path,body)=>{
+      assert.equal(path,'/api/segment');assert.equal(body.mode,'cursor');assert.equal(body.split_at,2);
+      assert.equal(body.cues[0].text,'光标分段');
+      return {cues:[{...body.cues[0],text:'光标',end:.5},{...body.cues[0],text:'分段',start:.5}],splits:1,estimated:2};
+    }},['doSegment','undo']);
+    ctx.state.cues=[{text:'前一句',start:0,end:.2},{text:'光标分段',start:.3,end:1},{text:'后一条',start:2,end:3}].map(ctx.normalizeCue);
+    ctx.state.selectedCues=new Set([0,2]);const before=JSON.stringify(ctx.state.cues);
+    assert.equal(await ctx.doSegment({index:1,splitAt:2}),true);
+    assert.equal(ctx.state.cues.length,4);
+    assert.equal(ctx.state.cues[1].text+ctx.state.cues[2].text,'光标分段');
+    assert.equal(ctx.state.cues[0].text,'前一句');assert.equal(ctx.state.cues[3].text,'后一条');
+    ctx.undo();assert.equal(JSON.stringify(ctx.state.cues),before);
+  });
+
   await test('replacement_and_undo_keep_one_document_history', async () => {
     const ctx = make({}, ['undo']);
     ctx.replaceCues([{start: 0, end: 1, text: '新字幕'}]);

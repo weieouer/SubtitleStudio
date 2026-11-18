@@ -139,7 +139,7 @@ def main():
             cdp.evaluate("window.__windowIsMaximized=windowIsMaximized;windowIsMaximized=()=>false;localStorage.setItem('subtitleStudio.layout.v2',JSON.stringify({left:280,right:520}));resetPanelWidths()")
             assert cdp.evaluate("state.layout.left===state.layout.right && Math.abs(document.querySelector('.left').getBoundingClientRect().width-document.querySelector('.right').getBoundingClientRect().width)<1")
             cdp.evaluate("windowIsMaximized=()=>true;window.dispatchEvent(new Event('resize'))")
-            assert cdp.evaluate("state.layout.left===520 && state.layout.right===520 && document.querySelector('.center').getBoundingClientRect().width>=460 && document.documentElement.scrollWidth===innerWidth")
+            cdp.wait("state.layout.left===520 && state.layout.right===520 && document.querySelector('.center').getBoundingClientRect().width>=460 && document.documentElement.scrollWidth===innerWidth")
             cdp.evaluate("windowIsMaximized=()=>false;window.dispatchEvent(new Event('resize'));windowIsMaximized=window.__windowIsMaximized;localStorage.removeItem('subtitleStudio.layout.v2');resetPanelWidths()")
             results.append({"name": "symmetric_startup_ignores_old_widths_maximized_sides_expand_and_restore", "passed": True})
             assert cdp.evaluate("state.settings.volume===80 && document.querySelector('#soundLevel').textContent==='80%'")

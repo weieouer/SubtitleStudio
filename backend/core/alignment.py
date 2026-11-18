@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import unicodedata
 import wave
 import numpy as np
 from rapidfuzz.distance import Levenshtein
@@ -16,6 +17,25 @@ from .model_manager import runtime_python, weights_present, model_directory, ens
 from .paths import RESULTS_DIR
 from .reference_match import normalized, _reference_boundaries
 from .alignment_quality import cue_timing_issue
+
+
+def _chars(text):
+    """对齐专用的逐字标准化：不把中文数字折算成阿拉伯数字。
+
+    对齐器按原文逐字返回（如“十”“万”），而整句折算会得到“100000”，两边长度不等会被误判为增删字。
+    """
+    chars, positions = [], []
+    start = 0
+    while start < len(text):
+        end = start + 1
+        while end < len(text) and unicodedata.combining(text[end]):
+            end += 1
+        for char in unicodedata.normalize("NFKC", text[start:end]).casefold():
+            if char.isalnum():
+                chars.append(char)
+                positions.append((start, end))
+        start = end
+    return ''.join(chars), positions
 
 
 def invalidate_alignment(cue, reason):
@@ -34,13 +54,13 @@ def apply_word_times(cues, indices, words, offset=0):
     """按文字映射词级时间戳，词内切分标记为估计，保存原始输入时间。"""
     query, bounds = '', [0]
     for ci in indices:
-        query += normalized(cues[ci]['text'])[0]
+        query += _chars(cues[ci]['text'])[0]
         bounds.append(len(query))
     reference, times, word_ranges = '', [], []
     # 一条词记录坏掉时只标记受影响的字幕，不能终止其他字幕的对齐。
     words=[dict(word) for word in words]
     for word in words:
-        text = normalized(word['text'])[0]
+        text = _chars(word['text'])[0]
         try:
             start, end = float(word['start']) + offset, float(word['end']) + offset
             valid=math.isfinite(start) and math.isfinite(end) and start>=0 and end>start
@@ -76,7 +96,7 @@ def apply_word_times(cues, indices, words, offset=0):
             # 同一词内切出的零长度区间：保留原时间继续对齐其他条目。
             invalidate_alignment(cue,'对齐时长无效')
             continue
-        cue_normalized,positions=normalized(cue['text'])
+        cue_normalized,positions=_chars(cue['text'])
         selected=char_map[bounds[local]:bounds[local+1]]
         if any(value is None for value in selected):
             invalidate_alignment(cue,'对齐返回文字有增删，无法可靠分配词时间，已保留输入时间')

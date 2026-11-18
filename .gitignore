@@ -42,6 +42,7 @@ htmlcov/
 # 编辑器个人设置和操作系统生成文件
 /.vscode/
 /.idea/
+/.Claude/
 .DS_Store
 Thumbs.db
 Desktop.ini
