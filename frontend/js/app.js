@@ -7,7 +7,7 @@ const THEME_KEY = "subtitleStudio.theme";
 const MODE_LABEL = { extract: "字幕提取", align: "字幕对齐" };
 const THEMES = ["system", "light", "dark"];
 const SESSION_TOKEN = document.querySelector('meta[name="subtitle-session"]')?.content || "";
-const APP_VERSION = '3.2.2';
+const APP_VERSION = '4.0.0';
 const projectVersions = new Map();
 const projectConflicts = new Set();
 let projectSaveChain = Promise.resolve();

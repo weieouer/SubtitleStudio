@@ -57,7 +57,7 @@ WEB_DIR = FRONTEND_DIR
 OUTPUT_DIR = OUTPUTS_DIR
 PROJECT_DIR = PROJECTS_DIR
 
-VERSION = "3.2.2"
+VERSION = "4.0.0"
 STARTED_AT = time.time()
 SESSION_TOKEN = secrets.token_urlsafe(32)
 DIALOG_LOCK = threading.Lock()
