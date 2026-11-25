@@ -6,6 +6,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 from core.reference_match import normalized, parse_document, match_reference, options_from, sentence_ranges
+from core.validation import cues as validate_cues
 
 
 def cue(text, i=0, **more):
@@ -13,6 +14,15 @@ def cue(text, i=0, **more):
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_grouped_subtitle_scores_are_valid_alignment_inputs(self):
+        left = '沿着这条山路一直向前走'
+        result = self.match([left, '甲乙'], left+'出。')
+        first, second = validate_cues(result['cues'])
+        self.assertEqual(first['script_text'], left)
+        self.assertEqual(second['match_ratio'], 0.)
+        self.assertEqual(second['reference_match']['status'], 'weak')
+        self.assertEqual(result['hits'][-1]['ratio'], 0.)
+
     def test_speaker_numeral_never_merges_into_first_spoken_number(self):
         raw='张三：三个人来了。\n李四：四个人回家了。'
         result=self.match(['三个人来了','四个人回家了'],raw)

@@ -362,12 +362,15 @@ def gpu_status():
             continue
         prepared = engine_prepared(name)
         marker = ready_marker(name) if prepared else {}
+        error = str(marker.get("gpu_error") or "")
+        if marker.get("torch") == "cuda" and marker.get("cuda_available") is False and not error:
+            error = "CUDA 运行库已安装，驱动自检未通过"
         engines.append({
             "engine": name,
             "prepared": prepared,
             "torch": marker.get("torch", "cpu") if prepared else "",
             "cuda_available": marker.get("cuda_available") if prepared else None,
-            "error": str(marker.get("gpu_error") or "") if prepared else "",
+            "error": error,
         })
     installed = [item for item in engines if item["prepared"]]
     # 有失败/回退记录时优先显示 failed：CUDA torch 可能装上了但驱动不可用，

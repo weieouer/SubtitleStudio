@@ -112,7 +112,7 @@ const state = {
   timingPreview: false,
   lastExport: null,
   settings: {
-    mode: "extract", model: "large-v3", device: "auto", vad: true, keepInterjections: false, gap: 0.6, width: 20,
+    mode: "extract", model: "large-v3", device: "cpu", vad: true, keepInterjections: false, gap: 0.6, width: 20,
     keepPunc: true, wrapSubtitles: true, subtitleLead: 0, subtitleTail: 0, subtitleMin: 0, subtitleMax: 0,
     sound: true, volume: 80, arabicNumbers: false,
     matchMinimum: .64, matchHigh: .94, matchPhonetic: .90, matchAmbiguity: .035, matchGroup: 3,
@@ -699,7 +699,7 @@ function normalizeSettings() {
   const s = state.settings;
   if(s.timingDefaultsVersion!==3){s.subtitleLead=0;s.subtitleTail=0;s.subtitleMin=0;s.subtitleMax=0;s.timingDefaultsVersion=3;}
   s.mode = ['align','extract'].includes(s.mode) ? s.mode : 'extract';
-  s.device = ["auto", "cpu", "cuda"].includes(s.device) ? s.device : "auto";
+  s.device = ["auto", "cpu", "cuda"].includes(s.device) ? s.device : "cpu";
   s.model = String(s.model || "medium");
   s.vad = s.vad !== false;
   // 旧设置 dropInterjections=true 表示“丢弃”，迁移为 keepInterjections=false。
@@ -970,7 +970,7 @@ function applyProjectSettings(saved) {
   if (saved.vad != null) s.vad = !!saved.vad;
   if (saved.keepInterjections != null) s.keepInterjections = !!saved.keepInterjections;
   else if (saved.dropInterjections != null) s.keepInterjections = saved.dropInterjections === false;
-  if (saved.device) s.device = ["auto", "cpu", "cuda"].includes(saved.device) ? saved.device : "auto";
+  if (saved.device) s.device = ["auto", "cpu", "cuda"].includes(saved.device) ? saved.device : "cpu";
   if (saved.model && modelIsAvailable(saved.model)) s.model = saved.model;
   for (const key of ["keepPunc", "wrapSubtitles"]) if (saved[key] != null) s[key] = !!saved[key];
   for(const key of ['subtitleLead','subtitleTail','subtitleMin','subtitleMax'])s[key]=saved.timingDefaultsVersion===3 && saved[key]!=null?saved[key]:0;
@@ -1151,7 +1151,7 @@ function gpuStateView() {
     }
     return { text: '下载模型时将自动安装 GPU 环境', cls: '', action: '', hint: 'GPU 环境按需安装，当前不下载任何内容。' };
   }
-  return { text: '当前为 CPU 环境 · ' + (gpu.size_hint || ''), cls: '', action: '下载 GPU 环境', hint: '下载 CUDA 版 PyTorch 供 Qwen/FireRed 引擎使用；失败会保留 CPU。' };
+  return { text: '当前为 CPU 环境 · ' + (gpu.size_hint || ''), cls: '', action: '下载 GPU 环境', hint: '配置 Qwen / FireRed 的 CUDA 环境，Windows 上 Whisper 也可使用其中的 cuBLAS 运行库。' };
 }
 function renderGpuState() {
   const box = $('#gpuState'), text = $('#gpuStateText'), button = $('#gpuDownload');
@@ -2140,6 +2140,8 @@ function contentSourceVisible(cue, verification=cueVerification(cue)) {
 
 // 两个互相独立的状态槽；每槽始终只返回一个当前状态，不追加历史通过标签。
 function cueStageStatuses(cue) {
+  const cached = verificationCache?.stages.get(cue);
+  if (cached) return cached;
   const pending=(label)=>({status:'unchecked',label,reason:label});
   const verdict=(issues,label)=>issues.reasons.length
     ? {status:'suspect',obvious:issues.obvious,label:issues.obvious?'明显错误':'疑似问题',reason:issues.reasons.join('；')}
@@ -2153,8 +2155,9 @@ function cueStageStatuses(cue) {
   const contentIssues=cueVerificationIssues(contentCue,{requireReference:state.script.length>0,stage:'calibrate',includeTiming:false});
   if(hasCompletedModification(cue)&&reference&&!sameReference&&!contentIssues.reasons.length)
     contentIssues.reasons.push('当前字幕与右侧参考不一致');
+  const passLabel = calibrated ? '校准通过' : hasCompletedModification(cue) ? '修改通过' : '校验通过';
   const calibration=checked
-    ? verdict(calibrated?{reasons:[],obvious:false}:contentIssues,calibrated?'校准通过':'校验通过')
+    ? verdict(calibrated?{reasons:[],obvious:false}:contentIssues,passLabel)
     : pending('尚未校准');
   // 修改文字或时间使旧对齐过期后，恢复待对齐；本次失败则覆盖为错误。
   const review=cue.timing_review;
@@ -2164,7 +2167,9 @@ function cueStageStatuses(cue) {
   if(attempted&&!cue.alignment&&!timing.reasons.length)
     timing.reasons.push('未取得可靠的音轨对齐结果'),timing.obvious=true;
   const alignment=attempted?verdict(current&&review.source==='manual'?{reasons:[],obvious:false}:timing,'对齐通过'):pending('尚未对齐');
-  return {calibration,alignment};
+  const result = {calibration,alignment};
+  verificationCache?.stages.set(cue,result);
+  return result;
 }
 
 function confirmCueTiming(cue,source='manual') {
@@ -2253,9 +2258,10 @@ function showVerificationReport(operation, before, after, options={}) {
 
 function cueVerification(cue) {
   if (!verificationCache) return computeCueVerification(cue);
-  if (verificationCache.has(cue)) return verificationCache.get(cue);
+  const checks = verificationCache.checks;
+  if (checks.has(cue)) return checks.get(cue);
   const value = computeCueVerification(cue);
-  verificationCache.set(cue, value);
+  checks.set(cue, value);
   return value;
 }
 
@@ -2305,7 +2311,8 @@ function cueReviewHtml(cue, i) {
     details = '<details class="match-alternatives"><summary>' + escapeHtml(m.stale ? '参考待复核' : m.label || '匹配详情') + ' · ' + score(m.score) + (m.reference?.source_name?' · '+escapeHtml(m.reference.source_name):'') + '</summary>' +
       '<p class="match-metrics">字符 ' + score(m.character_score) + ' · 拼音 ' + score(m.pinyin_score) + '</p>' +
       (m.warning?'<p class="match-context">'+escapeHtml(m.warning)+'</p>':'') +
-      (m.status === 'ambiguous' ? '<button type="button" class="mini" data-review="confirm" data-tip="确认当前参考位置，再手动采用文字。">确认当前位置</button>' : '') +
+      (m.context?.status === 'bounded' ? '<p class="match-context">参考原文位于前后两条已定位字幕之间。</p>' : '') +
+      (['weak','ambiguous'].includes(m.status) && m.reference && !m.stale && !m.reference.reference_only ? '<button type="button" class="mini" data-review="confirm" '+(m.candidate_confirmed?'disabled':'')+'>'+ (m.candidate_confirmed?'位置已确认':'确认当前位置')+'</button>' : '') +
       (m.alternatives || []).map((c,j) => '<div class="match-candidate"><p>'+escapeHtml(subtitleText(c.text))+'</p><small>'+escapeHtml(c.source_name || '')+' · 第 '+c.paragraph_start+' 段 · '+score(c.score)+'</small>'+(m.status==='ambiguous' && !c.group_only && !c.reference_only ? '<button type="button" class="mini" data-review="candidate" data-candidate="'+j+'">选择此位置</button>' : '')+'</div>').join('')+'</details>';
   }
   return details + approve;
@@ -2325,6 +2332,7 @@ function filteredRows() {
       if(state.filter==='unaligned'&&alignment.status!=='unchecked')return false;
       if(state.filter==='calibrated'&&calibration.label!=='校准通过')return false;
       if(state.filter==='verified'&&calibration.label!=='校验通过')return false;
+      if(state.filter==='modified'&&calibration.label!=='修改通过')return false;
       if(state.filter==='edited'&&calibration.status!=='passed')return false;
       if(state.filter==='aligned'&&alignment.status!=='passed')return false;
       if (q) {
@@ -2390,7 +2398,7 @@ function badgesHtml(cue) {
 
 function renderTable() {
   const previousVerificationCache = verificationCache;
-  verificationCache = new Map();
+  verificationCache = {checks:new Map(), stages:new Map()};
   try {
     renderTableBody();
   } finally {
@@ -2403,7 +2411,6 @@ function renderTableBody() {
   state.rawPresentationCache=null;
   const rows = filteredRows();
   cueBody.innerHTML = rows.map(({ cue, i }) => {
-    const verification=cueVerification(cue),passed=['passed','modified'].includes(verification?.status);
     const textClass = cueTextClass(cue);
     return `<tr data-i="${i}" class="script-line ${cueExcluded(cue) ? 'excluded' : ''} ${state.selectedCues.has(i) ? "selected" : ""} ${i === state.playingIndex ? 'playing' : ''}">
       <td class="idx"><input type="checkbox" class="cue-pick" ${state.selectedCues.has(i)?'checked':''} aria-label="选择字幕 ${escapeHtml(cue.display_id)}"><b>${escapeHtml(cue.display_id)}</b><span class="cue-time-range"><input class="time" data-field="start" value="${fmtCueTime(cue.start)}" aria-label="第${i+1}条开始时间"><span>→</span><input class="time" data-field="end" value="${fmtCueTime(cue.end)}" aria-label="第${i+1}条结束时间"></span><span class="badges">${badgesHtml(cue)}</span></td>
@@ -4399,10 +4406,11 @@ function bindEvents() {
       releaseVerificationExclusions([cue]);
       pushHistory(before);renderAll();scheduleSave();
     }
-    else if (action === 'confirm') { const before = snapshot(); cue.reference_match.candidate_confirmed = true; pushHistory(before); renderScript(); scheduleSave(); }
+    else if (action === 'confirm') { const before = snapshot(); cue.reference_match.candidate_confirmed = true; pushHistory(before); renderAll(); scheduleSave(); }
     else if (action === 'candidate') {
       const candidate = cue.reference_match.alternatives[Number(e.target.closest('[data-candidate]').dataset.candidate)];
       const before = snapshot(); cue.script_text = candidate.text; cue.script_index = candidate.paragraph_start - 1;
+      cue.match_ratio = candidate.score;
       Object.assign(cue.reference_match, {reference:candidate, score:candidate.score, character_score:candidate.character_score, pinyin_score:candidate.pinyin_score, candidate_confirmed:true, differences:candidate.differences || []});
       pushHistory(before); renderAll(); scheduleSave();
     } else if (!e.target.closest('details,button,input,[contenteditable="true"]') && !e.ctrlKey && !e.metaKey) { focusWave(cue); }

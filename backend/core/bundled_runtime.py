@@ -69,10 +69,14 @@ def configure_cuda_libraries():
     if os.name != 'nt':
         return
     python = python_for('firered') or python_for('qwen')
-    if python is None:
+    roots = ([python.parent] if python else []) + [ROOT_DIR / 'data/engines' / e for e in ('qwen', 'firered')]
+    for root in roots:
+        directory = root / 'Lib/site-packages/torch/lib'
+        if not (directory / 'cublas64_12.dll').is_file():
+            continue
+        path = str(directory)
+        if path not in _DLL_PATHS:
+            _DLL_HANDLES.append(os.add_dll_directory(path))
+            _DLL_PATHS.add(path)
+            os.environ['PATH'] = path + os.pathsep + os.environ.get('PATH', '')
         return
-    directory = python.parent / 'Lib/site-packages/torch/lib'
-    if directory.is_dir() and str(directory) not in _DLL_PATHS:
-        _DLL_HANDLES.append(os.add_dll_directory(str(directory)))
-        _DLL_PATHS.add(str(directory))
-        os.environ['PATH'] = str(directory) + os.pathsep + os.environ.get('PATH', '')

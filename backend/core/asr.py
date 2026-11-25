@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import math
+import os
 import threading
+from copy import deepcopy
 from pathlib import Path
 
 from .paths import MODELS_DIR
@@ -32,7 +34,11 @@ def _whisper_model(factory, path, device, compute):
         if _MODEL_CACHE.get('key') == key:
             return _MODEL_CACHE['model'], True
         clear_model_cache()
-        model = factory(str(path), device=device, compute_type=compute)
+        workers = {}
+        if device == "cpu" and not os.environ.get("OMP_NUM_THREADS"):
+            available = getattr(os, 'process_cpu_count', os.cpu_count)() or 1
+            workers['cpu_threads'] = 6 if available >= 12 else min(4, available)
+        model = factory(str(path), device=device, compute_type=compute, **workers)
         _MODEL_CACHE.update(key=key, model=model)
         return model, False
 
@@ -93,17 +99,14 @@ def _cuda_runtime_ok() -> bool:
     """get_cuda_device_count 只查驱动；cuBLAS 缺失时提前回退 CPU。"""
     import ctypes
     import ctypes.util
-    import os
     from .bundled_runtime import configure_cuda_libraries
     configure_cuda_libraries()
     if os.name == "nt":
-        for name in ("cublas64_12.dll", "cublas64_11.dll"):
-            try:
-                ctypes.WinDLL(name)
-                return True
-            except OSError:
-                continue
-        return False
+        try:
+            ctypes.WinDLL("cublas64_12.dll")
+            return True
+        except OSError:
+            return False
     try:
         return bool(ctypes.util.find_library("cublas"))  # type: ignore[attr-defined]
     except Exception:
@@ -114,6 +117,8 @@ def resolve_device(requested: str = "auto") -> tuple[str, str]:
     if requested == "cpu":
         return "cpu", "int8"
     if requested == "cuda":
+        from .bundled_runtime import configure_cuda_libraries
+        configure_cuda_libraries()
         return "cuda", "float16"
     try:
         import ctranslate2
@@ -210,6 +215,16 @@ def transcribe(path: str, model_name: str = "medium", device: str = "auto",
         raise RuntimeError(f"模型未下载：{model_name}（{hint}）")
 
     check_cancel()
+    # 仅复用同一文件的一次完整成功识别。局部重识别提供自己的 PCM，始终独立处理。
+    def source_key():
+        source = Path(path).resolve()
+        try:
+            stat = source.stat()
+        except OSError:
+            return None
+        return str(source), stat.st_size, stat.st_mtime_ns, vad
+
+    key = source_key() if audio is None else None
     report(0.01, "读取音频（优先复用缓存）…")
     try:
         if audio is None:audio = decode_audio(str(path), 16000, cancel_event=cancel_event)
@@ -231,11 +246,17 @@ def transcribe(path: str, model_name: str = "medium", device: str = "auto",
         try:
             model, reused = _whisper_model(WhisperModel, model_path, current_dev, current_compute)
             report(.06, ('复用已加载模型 ' if reused else '模型就绪 ') + model_name + f'（{label}）')
+            with _MODEL_LOCK:
+                cached = _MODEL_CACHE.get('transcription')
+                if key is not None and _MODEL_CACHE.get('model') is model and cached and cached[0] == key:
+                    check_cancel()
+                    report(1., '已复用本次会话中相同素材和设置的识别结果')
+                    return deepcopy(cached[1])
             cues, info, duration = run(model)
             from .audio_boundaries import refine_boundaries
             cues=refine_boundaries(cues,audio,cancel_event=cancel_event)
             report(1.0, f"完成，共 {len(cues)} 条")
-            return cues, {
+            result = cues, {
                 "duration": round(duration, 3),
                 "language": getattr(info, "language", "zh"),
                 "device": current_dev,
@@ -243,6 +264,12 @@ def transcribe(path: str, model_name: str = "medium", device: str = "auto",
                 "model": model_name,
                 "boundary_refinement": "rms_spectral_flux_hysteresis",
             }
+            check_cancel()
+            if key is not None and key == source_key():
+                with _MODEL_LOCK:
+                    if _MODEL_CACHE.get('model') is model:
+                        _MODEL_CACHE['transcription'] = key, deepcopy(result)
+            return result
         except Cancelled:
             raise
         except Exception as exc:

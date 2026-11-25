@@ -22,6 +22,27 @@ class SuspectCaptionTests(unittest.TestCase):
     def tearDown(self):
         asr.clear_model_cache()
 
+    def test_complete_result_reuse_isolated_from_edits_regions_and_setting_changes(self):
+        with tempfile.TemporaryDirectory() as folder, patch('faster_whisper.WhisperModel') as factory, \
+             patch.object(asr, 'find_model', return_value=Path(folder)), \
+             patch.object(media, 'decode_audio', return_value=[]):
+            source = Path(folder)/'test.wav'
+            source.write_bytes(b'first')
+            infer = factory.return_value.transcribe
+            infer.side_effect = lambda *a, **kw: (iter([]), SimpleNamespace(duration=2, language='zh'))
+            def run(**kw):
+                return asr.transcribe(str(source), 'large-v3', 'cpu', **kw)
+            raw, info = run()
+            raw.append({'text':'人工修改'})
+            info['language'] = 'test'
+            cached, meta = run()
+            self.assertEqual((cached, meta['language'], infer.call_count), ([], 'zh', 1))
+            run(audio=[])
+            run(vad=False)
+            source.write_bytes(b'changed')
+            run(vad=False)
+            self.assertEqual(infer.call_count, 4)
+
     def test_repeated_whisper_recognition_reuses_loaded_model_and_device_change_reloads(self):
         with patch('faster_whisper.WhisperModel') as engine, \
              patch.object(asr,'find_model',return_value=Path('fixture-cached-model')), \
@@ -192,6 +213,8 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(models.gpu_status()['state'],'cpu')
             (qwen/'ready.json').write_text(json.dumps({'engine':'qwen','torch':'cuda','cuda_available':True}),encoding='utf-8')
             self.assertEqual(models.gpu_status()['state'],'cuda')
+            (qwen/'ready.json').write_text(json.dumps({'engine':'qwen','torch':'cuda','cuda_available':False}),encoding='utf-8')
+            self.assertEqual(models.gpu_status()['state'],'failed')
             (qwen/'ready.json').write_text(json.dumps({'engine':'qwen','torch':'cuda','cuda_available':False,
                                                         'gpu_error':'CUDA 已安装，但当前显卡/驱动不可用'}),encoding='utf-8')
             self.assertEqual(models.gpu_status()['state'],'failed')

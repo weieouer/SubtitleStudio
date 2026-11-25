@@ -425,7 +425,7 @@ def _reference_break_context(cue: dict):
         raw = manual
     elif (not raw or reference.get('reference_only')
             or match.get('status') in ('unmatched', 'context_mismatch')
-            or (match.get('status') == 'ambiguous' and not match.get('candidate_confirmed'))):
+            or (match.get('status') in ('weak', 'ambiguous') and not match.get('candidate_confirmed'))):
         return None
     target, target_positions = normalized(raw)
     if not query or not target:

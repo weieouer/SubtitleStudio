@@ -1312,7 +1312,7 @@ export async function runFrontendTests(source) {
       {text:'人工确认',start:3,end:4,edited:true,modification_complete:{text:'人工确认'}},
       {text:'未校验',start:4,end:5}];
     const before=JSON.stringify(ctx.state.cues);
-    for(const [filter,indices] of [['minor',[1]],['obvious',[2]],['calibrated',[]],['verified',[0,3]],['aligned',[]],['unchecked',[4]],['unaligned',[0,1,2,3,4]]]){
+    for(const [filter,indices] of [['minor',[1]],['obvious',[2]],['calibrated',[]],['verified',[0]],['modified',[3]],['aligned',[]],['unchecked',[4]],['unaligned',[0,1,2,3,4]]]){
       ctx.state.filter=filter;assert.deepEqual(Array.from(ctx.filteredRows(),row=>row.i),indices);
     }
     ctx.state.filter='obvious';ctx.selectAllCues(true);assert.equal(ctx.state.selectedCues.size,5);

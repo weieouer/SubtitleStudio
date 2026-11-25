@@ -8,7 +8,7 @@ from . import srt_io
 
 def _confirmed(match):
     return match.get('status') in ('high', 'typo', 'homophone', 'missing', 'extra') or (
-        match.get('status') == 'ambiguous' and match.get('candidate_confirmed') is True)
+        match.get('status') in ('ambiguous', 'weak') and match.get('candidate_confirmed') is True)
 
 
 def normalize_cues(cues, keep_punc=True, reference_fingerprint=None):
@@ -42,12 +42,16 @@ def normalize_cues(cues, keep_punc=True, reference_fingerprint=None):
                        or match.get('reference_fingerprint') == reference_fingerprint))
         # 组合句定位可靠不代表分配给每条字幕的文字也可靠；低于该条阈值时交给人工。
         score,minimum=match.get('score'),match.get('minimum_used')
+        if (match.get('context') or {}).get('status') == 'bounded':
+            score = match.get('context_score', score)
         weak=(isinstance(score,(int,float)) and isinstance(minimum,(int,float)) and score<minimum)
         outside=(match.get('context') or {}).get('status')=='outside'
-        if (weak or outside) and not match.get('candidate_confirmed'):
-            cue['reference_match']={**match,'status':'ambiguous','label':'多候选匹配',
+        if usable and match.get('status') not in ('unmatched', 'context_mismatch') and (weak or outside) and not match.get('candidate_confirmed'):
+            ambiguous = bool(match.get('alternatives')) and match.get('status') == 'ambiguous'
+            cue['reference_match']={**match,'status':'ambiguous' if ambiguous else 'weak',
+                'label':'多候选匹配' if ambiguous else '逐条匹配待确认',
                 'candidate_confirmed':False,'warning':('参考位置与上下文冲突，请人工确认' if outside else
-                    '整句已定位，但此条文字匹配证据不足；保留当前字幕，请人工确认参考')}
+                    '此条文字匹配证据不足，请核对参考原文或试听。')}
             cue['match_needs_review']=True
             pending.append(index)
             continue
@@ -76,6 +80,7 @@ def normalize_cues(cues, keep_punc=True, reference_fingerprint=None):
             changed.append(index)
         cue['reference_match'] = {**match, 'status': 'high', 'label': '高度匹配',
                                   'query_text': target, 'stale': False, 'differences': []}
+        cue['reference_match'].pop('warning', None)
         cue['match_needs_review'] = False
         cue['verification_stage'] = 'calibrate'
         completed.append(index)

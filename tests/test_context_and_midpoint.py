@@ -7,6 +7,7 @@ from unittest.mock import Mock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
 import app
 from core import segment
+from core.calibration import normalize_cues
 from core.reference_match import parse_documents,match_reference
 
 
@@ -16,6 +17,22 @@ class ContextTests(unittest.TestCase):
     left='我们明天一起去公园散步'
     right='请你现在把门口快递拿回来'
     extra='感谢各位观众朋友一直以来的支持和陪伴'
+
+    def test_bounded_reference_uses_original_words_and_offsets(self):
+        for said, written, expected in [('驱除的太慢', '祛除得太慢', '祛除得太慢'),
+                                        ('他离开千水去了天宇与另外', '帝侯君王去了天宇与另外', '帝侯君王去了天宇与另外'),
+                                        ('一封', '一方', '一封'), ('地方大大杀了人','地方大大n','地方大大杀了人')]:
+            with self.subTest(said=said):
+                raw = '。'.join([self.left, written, self.right, said])
+                items = cues([self.left, said, self.right])
+                matched = match_reference(items, {'text': raw})['cues']
+                out = normalize_cues(matched)['cues'][1]
+                ref = out['reference_match']['reference']
+                self.assertEqual(raw[ref['start']:ref['end']], written+'。')
+                self.assertEqual(ref['text'], out['script_text'])
+                self.assertEqual(out['text'], expected)
+                self.assertEqual(out['reference_match']['status'], 'weak' if said==expected else 'high')
+                self.assertEqual(out['asr_original']['text'], said)
 
     def test_exact_elsewhere_in_other_script_is_red_and_not_adoptable(self):
         doc=parse_documents([{'name':'当前场景','text':self.left+'。\n'+self.right+'。'},

@@ -812,16 +812,16 @@ def main():
               const before=snapshot(),cell=document.querySelector('.cue-text');cell.focus();
               cell.innerText='我们明天回家';cell.dispatchEvent(new Event('input',{bubbles:true}));cell.blur();
               if(!state.cues[0].alignment.stale||cueStatistics(state.cues).aligned!==0||!document.querySelector('#cueCount').textContent.includes('已对齐 0 条')||!document.querySelector('#cueBody tr').hidden)return false;
-              if(document.querySelector('.badges').textContent.includes('对齐通过')||!document.querySelector('.badges').textContent.includes('校准通过'))return false;
+              if(document.querySelector('.badges').textContent.includes('对齐通过')||!document.querySelector('.badges').textContent.includes('修改通过'))return false;
               undo();if(snapshot()!==before||cueStatistics(state.cues).aligned!==1||!document.querySelector('#cueCount').textContent.includes('已对齐 1 条'))return false;
               const time=document.querySelector('input.time[data-field="start"]');time.focus();time.value=fmtCueTime(.2);
               time.dispatchEvent(new Event('change',{bubbles:true}));time.blur();
-              if(cueStatistics(state.cues).aligned!==0||!document.querySelector('#cueCount').textContent.includes('已对齐 0 条')||!document.querySelector('#cueBody tr').hidden)return false;
+              if(state.cues[0].timing_review?.source!=='manual'||cueStatistics(state.cues).aligned!==1||!document.querySelector('#cueCount').textContent.includes('已对齐 1 条')||document.querySelector('#cueBody tr').hidden)return false;
               undo();if(snapshot()!==before||cueStatistics(state.cues).aligned!==1)return false;
               delete state.cues[0].alignment;renderAll();
               return cueReportVerdict(state.cues[0])==='unchecked'&&cueStatistics(state.cues).aligned===0;
             })()""")
-            results.append({'name':'editing_text_or_time_invalidates_alignment_badge_and_count_undo_restores_them','passed':True})
+            results.append({'name':'editing_text_invalidates_alignment_manual_time_confirms_it_and_undo_restores','passed':True})
             assert cdp.evaluate("""(async()=>{
               const input={media_path:state.media.path,cues:[{text:'第一行\\n\\n第二行',start:.1,end:.9}],options:{keep_punctuation:true}};
               const before=JSON.stringify(input),file=await api('/api/srt/export',input);

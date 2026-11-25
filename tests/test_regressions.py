@@ -619,15 +619,19 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(len(self.json_request('GET','/api/models')[1]['models']),3)
         self.assertEqual(self.json_request('POST','/api/models/download',{'model':'not-a-model'})[0],400)
         request_id=hashlib.sha1(str(time.time_ns()).encode()).hexdigest()[:16]
-        items=[cue('确认过的字幕',original_text='原始 ASR',original_start=0,original_end=1)]
+        items=[cue('确认过的字幕',original_text='原始 ASR',original_start=0,original_end=1,
+                   match_ratio=-.06,reference_match={'score':-.06})]
         aligned=[dict(items[0],start=.1,end=1.1)]
-        with patch.object(alignment,'align_cues',return_value=(aligned,{'duration':2})), \
+        with patch.object(alignment,'align_cues',return_value=(aligned,{'duration':2})) as engine, \
              patch.object(jobs,'RESULTS_DIR',self.folder), \
              patch.object(app,'list_auxiliary',return_value=[{'name':'qwen3-forcedaligner-0.6b','available':True}]):
             status,response=self.json_request('POST','/api/alignment/jobs',{'path':str(self.binary),'cues':items,'device':'cpu','request_id':request_id})
             self.assertEqual(status,200,response)
             app.JOBS.queue.join()
             completed=self.json_request('GET','/api/jobs/'+request_id+'?result=1')[1]['job']
+            submitted = engine.call_args.args[1][0]
+            self.assertEqual(submitted['match_ratio'], 0.)
+            self.assertEqual(submitted['reference_match']['score'], 0.)
             self.assertEqual(completed['task'],'align')
             self.assertEqual(completed['cues'][0]['text'],'确认过的字幕')
             self.assertEqual(completed['cues'][0]['original_text'],'原始 ASR')

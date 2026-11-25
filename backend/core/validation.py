@@ -43,6 +43,13 @@ def cues(value, *, repair_word_times=False) -> list[dict]:
                 raise ValueError(f"第{i}条{field}必须是字符串")
         for field in ("confidence", "match_ratio", "no_speech_prob"):
             if cue.get(field) is not None:
+                # 旧匹配器的长度罚分最多为 0.12，零相似度的组合子条可能存成负数。
+                ratio = cue[field]
+                if field == 'match_ratio' and type(ratio) in (int, float) and -.12 <= ratio < 0:
+                    cue[field] = 0.
+                    match = cue.get('reference_match')
+                    if isinstance(match, dict) and match.get('score') == ratio:
+                        match['score'] = 0.
                 number(cue[field], f"第{i}条{field}", 0, 1)
         words = cue.get("words", [])
         if not isinstance(words, list):

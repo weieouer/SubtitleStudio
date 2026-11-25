@@ -31,10 +31,17 @@ class ReferenceCopyTests(unittest.TestCase):
                         group={'score':.99})
         result=calibration.normalize_cues([item])
         self.assertEqual(result['cues'][0]['text'],'当前字幕')
-        self.assertEqual(result['cues'][0]['reference_match']['status'],'ambiguous')
+        self.assertEqual(result['cues'][0]['reference_match']['status'],'weak')
         self.assertIn('证据不足',result['cues'][0]['reference_match']['warning'])
         self.assertEqual(result['pending_indices'],[0])
         self.assertEqual(result['completed_indices'],[])
+
+    def test_no_candidate_retains_its_diagnosis_after_calibration(self):
+        for status in ('unmatched', 'context_mismatch'):
+            item = cue('需试听', reference_match={'status': status, 'reference': None,
+                       'score': 0., 'minimum_used': .88, 'warning': '此处无台词'})
+            out = calibration.normalize_cues([item])['cues'][0]
+            self.assertEqual(out['reference_match'], item['reference_match'])
 
     def test_explicit_candidate_confirmation_can_resolve_weak_match(self):
         item=with_match('原句','人工确认的参考',status='ambiguous',score=.35,minimum_used=.64,

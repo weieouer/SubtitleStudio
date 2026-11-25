@@ -33,7 +33,7 @@ _INDEX_LOCK=threading.RLock()
 log=logging.getLogger('studio.reference')
 STATUS_LABELS = {"high": "高度匹配", "typo": "疑似错字", "homophone": "疑似谐音",
                  "missing": "疑似漏字", "extra": "疑似多字", "unmatched": "未匹配", "ambiguous": "多候选匹配",
-                 "context_mismatch":"疑似多余台词"}
+                 "weak": "逐条匹配待确认", "context_mismatch":"疑似多余台词"}
 NARRATION = re.compile(r"^\s*(?:[【\[（(△▲#]|第.{1,10}[集场幕]|场景[：:]|镜头[：:]|画面[：:]|音效[：:]|BGM[：:])", re.I)
 ACTION = re.compile(r"(?:镜头(?:切换|转向|拉近)|画面(?:切换|出现)|缓缓(?:走|转|抬)|转身(?:离开|走)|推开房门|望向窗外)")
 MAX_SCRIPT = 500_000
@@ -255,6 +255,11 @@ def effective_minimum(length: int, options: dict) -> float:
     return min(.98, options["minimum"] + (.08 if length <= 5 else .035 if length <= 8 else 0))
 
 
+def _match_score(character, phonetic, query_length, reference_length, weight):
+    penalty = .12 * abs(query_length-reference_length) / max(1, query_length, reference_length)
+    return max(0., min(1., (1-weight)*character + weight*phonetic - penalty))
+
+
 @lru_cache(maxsize=1)
 def dialogue_prefixes(raw):
     """只屏蔽明确的角色前缀，保留原文坐标；冒号、引号后的文字仍是对白。"""
@@ -322,7 +327,7 @@ def inherit_reference(parent: dict, pieces: list[dict]) -> bool:
     """把已确认位置的父参考区间分配给子条目，不重复引用整段参考。"""
     match=parent.get('reference_match') or {};reference=match.get('reference')
     if (not reference or match.get('stale') or reference.get('reference_only')
-            or (match.get('status')=='ambiguous' and not match.get('candidate_confirmed'))
+            or (match.get('status') in ('ambiguous', 'weak') and not match.get('candidate_confirmed'))
             or ''.join(p['text'] for p in pieces)!=parent['text']):return False
     limits=reference.get('source_range')
     if limits and not limits[0]<=reference['start']<reference['end']<=limits[1]:return False
@@ -339,7 +344,7 @@ def inherit_reference(parent: dict, pieces: list[dict]) -> bool:
     for piece,lo,hi in zip(pieces,cuts,cuts[1:]):
         q=normalized(piece['text'])[0];r=normalized(raw[lo:hi])[0]
         character=fuzz.ratio(q,r)/100;phonetic=fuzz.ratio(pinyin_tokens(q),pinyin_tokens(r))/100
-        score=.75*character+.25*phonetic-.12*abs(len(q)-len(r))/max(1,len(q),len(r))
+        score=_match_score(character,phonetic,len(q),len(r),DEFAULT_OPTIONS['pinyin_weight'])
         status=_status(q,r,character,phonetic,DEFAULT_OPTIONS)
         current={**reference,'text':raw[lo:hi]}
         # 参考缺少绝对位置（旧项目或手工构造）时仍可继承文字，只是不推算字符区间。
@@ -536,8 +541,7 @@ class ReferenceIndex:
                 continue
             seen.add((a, b))
             phonetic = fuzz.ratio(py, self.phonetic[a:b]) / 100
-            score = ((1 - self.options["pinyin_weight"]) * character + self.options["pinyin_weight"] * phonetic
-                     - .12 * abs(n - (b - a)) / max(n, b - a))
+            score = _match_score(character, phonetic, n, b-a, self.options["pinyin_weight"])
             if score < .38:
                 continue
             desc = self.describe(a, b)
@@ -602,6 +606,18 @@ def _reference_boundaries(query: str, reference: str, boundaries: list[int]) -> 
         else:
             for i in range(a, b + 1):
                 mapping[i] = c + round((d - c) * (i - a) / max(1, b - a))
+    # 从两端固定完全一致的子条；编辑路径上的插入不能挤进已精确命中的相邻字幕。
+    cuts = boundaries if boundaries and boundaries[0] == 0 and boundaries[-1] == len(query) else []
+    for left, right in zip(cuts, cuts[1:]):
+        if query[left:right] != reference[left:right]:
+            break
+        mapping[right] = right
+    for left, right in zip(reversed(cuts[:-1]), reversed(cuts[1:])):
+        start = len(reference) - (len(query)-left)
+        stop = len(reference) - (len(query)-right)
+        if start < 0 or query[left:right] != reference[start:stop]:
+            break
+        mapping[left] = start
     mapping[0], mapping[-1] = 0, len(reference)
     result, previous = [], 0
     for boundary in boundaries:
@@ -703,13 +719,34 @@ def _context_constraints(index, queries, cues, excluded, sequence_indices=None):
 def _context_candidate(index,query,context):
     lo,hi=context['lower'],context['upper']
     if not query or lo>=hi:return None
-    alignment=fuzz.partial_ratio_alignment(query,index.text[lo:hi])
+    fragment = index.text[lo:hi]
+    py = pinyin_tokens(query)
+    # 一条字幕夹在同一来源的两句连续锚点之间，先核对剩下的完整分句。
+    # 仅在长度接近、没有句界或角色切换时使用这个区间。
+    if (context['next_cue'] - context['previous_cue'] == 2
+            and min(len(query), len(fragment)) >= .65 * max(len(query), len(fragment))
+            and bisect_right(index.sentence_ends, lo) == bisect_left(index.sentence_ends, hi)
+            and index.source_index(lo, hi) == context['source_index']):
+        character = fuzz.ratio(query, fragment)/100
+        phonetic = fuzz.ratio(py, index.phonetic[lo:hi])/100
+        score = _match_score(character, phonetic, len(query), hi-lo, index.options['pinyin_weight'])
+        ref = index.describe(lo, hi)
+        if character >= .5 and not ref['reference_only']:
+            # 位置和文字分开记录。足够长的连续相同文字或高度一致的读音，
+            # 才能借助双侧锚点自动采用；单字巧合的短句仅供确认。
+            common = SequenceMatcher(None, query, fragment, autojunk=False).find_longest_match().size
+            similar_length = min(len(query), len(fragment)) >= .75 * max(len(query), len(fragment))
+            corroborated = similar_length and (phonetic >= .8 or common >= max(4, len(query)*.5, len(fragment)*.5))
+            context_score = (1+score)/2 if corroborated else score
+            return {**ref, 'norm_start':lo, 'norm_end':hi, 'character_score':character,
+                    'pinyin_score':phonetic, 'score':score, 'context_score':context_score}
+    alignment=fuzz.partial_ratio_alignment(query,fragment)
     if alignment is None:return None
     start,end=lo+alignment.dest_start,lo+alignment.dest_end
     if start>=end or index.source_index(start,end)!=context['source_index']:return None
     character=fuzz.ratio(query,index.text[start:end])/100
-    phonetic=fuzz.ratio(pinyin_tokens(query),index.phonetic[start:end])/100
-    score=(1-index.options['pinyin_weight'])*character+index.options['pinyin_weight']*phonetic-.12*abs(len(query)-(end-start))/max(len(query),end-start)
+    phonetic=fuzz.ratio(py,index.phonetic[start:end])/100
+    score=_match_score(character,phonetic,len(query),end-start,index.options['pinyin_weight'])
     candidate={**index.describe(start,end),'norm_start':start,'norm_end':end,
                'character_score':character,'pinyin_score':phonetic,'score':score}
     return candidate if index.reliable(candidate,len(query)) else None
@@ -734,10 +771,14 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
     excluded = {i for i, cue in enumerate(result) if cue.get("review_decision") in ("skipped", "non_script") and i not in forced}
     contexts=_context_constraints(index,queries,cues,excluded,sequence_indices)
     local_candidates={ci:_context_candidate(index,queries[ci],context) for ci,context in contexts.items()}
-    blocked={ci for ci,candidate in local_candidates.items() if candidate is None}
+    bounded_cues = {ci for ci, c in local_candidates.items() if c and 'context_score' in c}
     def within_context(candidate,start,end):
         return all(ci not in contexts or (candidate['source_index']==contexts[ci]['source_index']
             and contexts[ci]['lower']<=candidate['norm_start']<candidate['norm_end']<=contexts[ci]['upper']) for ci in range(start,end))
+    # 局部字符滑窗有时截掉同音字。先检查其它确实落在此区间的候选，再认定缺句。
+    blocked = {ci for ci, candidate in local_candidates.items() if candidate is None
+               and not any(within_context(c, ci, ci+1) and index.reliable(c, len(queries[ci]))
+                           for c in index.candidates(queries[ci]))}
     source_ids={source['id']:source for source in doc['sources']}
     def hint(cue):
         match=cue.get('reference_match') or {};ref=match.get('reference') or {}
@@ -754,12 +795,20 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
                 break
             if k > 1 and (cues[end - 1]["start"] - cues[end - 2]["end"] > opts["merge_gap"] or not queries[end - 1]):
                 break
+            if k > 1 and sequence_indices is not None and sequence_indices[end-1] != sequence_indices[end-2]+1:
+                break
+            if k > 1 and (i in bounded_cues or end-1 in bounded_cues):
+                break
             if k>1 and hints[end-2] and hints[end-1] and hints[end-2]!=hints[end-1]:break
             query += queries[end - 1]
             if not query:
                 break
-            candidates=index.candidates(query)
-            if k==1 and local_candidates.get(i):candidates=candidates+[local_candidates[i]]
+            if k == 1 and i in bounded_cues:
+                candidates = [local_candidates[i]]
+            else:
+                candidates = index.candidates(query)
+                if k == 1 and local_candidates.get(i):
+                    candidates = candidates + [local_candidates[i]]
             if k==1:singles[i]=candidates[:3]
             gain_base = sum(math.sqrt(max(1, len(q))) for q in queries[i:end])
             yield end,query,candidates,gain_base
@@ -785,11 +834,12 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
         for node in nodes:
             offer(i + 1, Node(node.score, node.end, node, (i, i + 1, None),node.source,node.ends))
             for end,query,candidates,gain_base in groups:
-                if node.source>=0 and query in index.repeated_queries:
+                if i not in bounded_cues and node.source>=0 and query in index.repeated_queries:
                     candidates=candidates+index.exact_after(query,node.source,node.ends[node.source])
                 for candidate in candidates:
                     sid=candidate['source_index']
-                    if candidate["norm_start"] < node.ends[sid] or not index.reliable(candidate, len(query)) or not within_context(candidate,i,end):
+                    bounded = 'context_score' in candidate
+                    if candidate["norm_start"] < node.ends[sid] or (not bounded and not index.reliable(candidate, len(query))) or not within_context(candidate,i,end):
                         continue
                     if sid!=node.source and node.source>=0 and len(query)<=3 and candidate['score']<opts['high']:continue
                     gain = gain_base * (candidate["score"] - .45)
@@ -825,7 +875,7 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
         mapped = _reference_boundaries(query, index.text[candidate["norm_start"]:candidate["norm_end"]], lengths)
         for offset, ci in enumerate(range(start, end)):
             a, b = candidate["norm_start"] + mapped[offset], candidate["norm_start"] + mapped[offset + 1]
-            if a < b:
+            if a < b and index.source_index(a, b) is not None:
                 positions[ci] = (a, b, start, end, candidate)
     source_hits=defaultdict(list)
     for ci,pos in sorted(positions.items()):source_hits[pos[4]['source_index']].append((ci,pos[0],pos[1]))
@@ -849,8 +899,7 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
             refnorm = index.text[a:b]
             charscore = fuzz.ratio(query, refnorm) / 100
             pyscore = fuzz.ratio(pinyin_tokens(query), index.phonetic[a:b]) / 100
-            score = ((1 - opts["pinyin_weight"]) * charscore + opts["pinyin_weight"] * pyscore
-                     - .12 * abs(len(query) - len(refnorm)) / max(1, len(query), len(refnorm)))
+            score = _match_score(charscore, pyscore, len(query), len(refnorm), opts["pinyin_weight"])
             status = _status(query, refnorm, charscore, pyscore, opts)
             # 同一组内可利用上下文；不把短片段分数伪装成组合分数。
             match.update({"status": status, "reference": reference, "character_score": round(charscore, 4),
@@ -858,6 +907,11 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
                           "above_high_threshold": score >= opts["high"],
                           "group": {"cue_start": gstart, "cue_end": gend, "text": group_candidate["text"], "score": group_candidate["score"]},
                           "differences": text_diff(cue["text"], reference["text"])})
+            if "context_score" in group_candidate:
+                match["context_score"] = round(group_candidate["context_score"], 4)
+                match["context"] = {**contexts[ci], "status": "bounded"}
+            if max(score, match.get("context_score", 0)) < match["minimum_used"]:
+                match.update(status="weak", warning="已定位参考片段，此条文字匹配证据不足，请核对原文或试听。")
             def available(candidate):
                 sid=candidate['source_index']
                 hits=source_hits.get(sid,[]);indices=source_cues.get(sid,[])
@@ -865,10 +919,11 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
                 prev_end=hits[prev][2] if prev>=0 else index.source_ranges[sid][0]
                 next_start=hits[next_][1] if next_<len(hits) else index.source_ranges[sid][1]
                 return prev_end<=candidate['norm_start'] and candidate['norm_end']<=next_start and within_context(candidate,gstart,gend)
-            group_query=''.join(queries[gstart:gend]);group_candidates=index.candidates(group_query)
+            group_query=''.join(queries[gstart:gend])
+            group_candidates=[] if ci in bounded_cues else index.candidates(group_query)
             sid=reference['source_index']
             source_matches=source_hits[sid];indices=source_cues[sid];prev=bisect_left(indices,gstart)-1;next_=bisect_left(indices,gend)
-            if group_query in index.repeated_queries:
+            if ci not in bounded_cues and group_query in index.repeated_queries:
                 group_candidates=group_candidates+index.exact_after(group_query,sid,source_matches[prev][2] if prev>=0 else index.source_ranges[sid][0],source_matches[next_][1] if next_<len(source_matches) else None)
             alternatives = [c for c in group_candidates if available(c)
                             and index.reliable(c, len(group_query)) and c["score"] >= group_candidate["score"] - opts["ambiguity"]
@@ -876,6 +931,7 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
             alternatives=list({(c['source_index'],c['norm_start'],c['norm_end']):c for c in alternatives}.values())
             if alternatives:
                 match["status"] = "ambiguous"
+                match.pop("warning", None)
                 match["alternatives"] = [{**c, "group_only": gend - gstart > 1,
                                            "differences": text_diff(cue["text"], c["text"]) if gend - gstart == 1 else []} for c in alternatives[:3]]
             cue["script_text"] = reference["text"]

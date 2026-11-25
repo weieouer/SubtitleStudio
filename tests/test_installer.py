@@ -16,6 +16,22 @@ from tools import package_release, prepare_runtime, release
 
 
 class RuntimeRecipeTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows DLL 搜索路径')
+    def test_whisper_finds_cuda_installed_by_source_gpu_button(self):
+        from backend.core import bundled_runtime as runtime
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            lib = root/'data/engines/qwen/Lib/site-packages/torch/lib'
+            lib.mkdir(parents=True)
+            (lib/'cublas64_12.dll').touch()
+            with patch.object(runtime,'ROOT_DIR',root), patch.object(runtime,'_DLL_HANDLES',[]), \
+                 patch.object(runtime,'_DLL_PATHS',set()), patch.dict(runtime.os.environ), \
+                 patch.object(runtime.os,'add_dll_directory') as register:
+                runtime.configure_cuda_libraries()
+                runtime.configure_cuda_libraries()
+                register.assert_called_once_with(str(lib))
+                self.assertEqual(runtime.os.environ['PATH'].split(runtime.os.pathsep)[0],str(lib))
+
     def test_chinese_alignment_does_not_eagerly_initialize_japanese_native_model(self):
         with tempfile.TemporaryDirectory() as folder:
             python=Path(folder)/'python.exe'
