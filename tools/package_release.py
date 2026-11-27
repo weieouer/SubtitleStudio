@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -14,8 +15,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 TOP = 'SubtitleStudio'
 TREES = ('backend', 'frontend', 'docs', 'tests', 'tools', 'runtime', 'wheels')
-FILES = ('main.py', 'pyproject.toml', '.gitignore', 'README.md', 'requirements.txt',
-         'requirements-lock.txt', 'config/engines.json', 'config/ui.json')
+FILES = ('main.py', 'pyproject.toml', 'uv.lock', '.python-version', '.gitignore', 'README.md',
+         'requirements.txt', 'config/engines.json', 'config/firered.json', 'config/ui.json')
 WORK = ('data/projects', 'data/results', 'data/uploads', 'data/outputs')
 REQUIRED = ('run.bat', 'backend/app.py', 'backend/launch.py', 'frontend/index.html',
             'backend/core/progress_console.py',
@@ -35,7 +36,7 @@ def app_version() -> str:
     return match.group(1)
 
 
-def selected_files(root: Path, include_work: bool):
+def selected_files(root: Path, include_work: bool, *, bundled=False):
     selected = {}
     for tree in TREES + (WORK if include_work else ()):
         base = root / tree
@@ -60,10 +61,32 @@ def selected_files(root: Path, include_work: bool):
     guide = root / 'tools/portable/首次使用说明.txt'
     if guide.is_file():
         selected['首次使用说明.txt'] = guide
-    missing = [name for name in REQUIRED if name not in selected]
+    required = [name for name in REQUIRED if name != 'requirements.txt'
+                and not (bundled and name.startswith('runtime/'))]
+    missing = [name for name in required if name not in selected]
     if missing:
         raise ValueError('缺少必需文件：' + ', '.join(missing))
     return dict(sorted(selected.items()))
+
+
+@contextmanager
+def release_files(root: Path, include_work: bool, *, bundled=False):
+    files = selected_files(root, include_work, bundled=bundled)
+    if bundled:
+        files.pop('requirements.txt', None)
+        yield files
+    elif 'uv.lock' in files:
+        from tools.development import export_requirements
+
+        with tempfile.TemporaryDirectory(prefix='subtitle-requirements-') as folder:
+            requirements = Path(folder) / 'requirements.txt'
+            export_requirements(requirements, root=root)
+            files['requirements.txt'] = requirements
+            yield files
+    elif 'requirements.txt' in files:
+        yield files
+    else:
+        raise ValueError('缺少 uv.lock 或随旧版发布的 requirements.txt')
 
 
 def verify_archive(path: Path):
@@ -104,7 +127,11 @@ def package(output: Path, include_work=False, allow_online=False):
     if output.exists():
         raise FileExistsError('目标文件已存在，保留原包，请换一个名称：' + str(output))
     output.parent.mkdir(parents=True, exist_ok=True)
-    selected = selected_files(ROOT, include_work)
+    with release_files(ROOT, include_work) as selected:
+        return write_archive(output, selected, include_work=include_work, allow_online=allow_online)
+
+
+def write_archive(output, selected, *, include_work, allow_online):
     wheels = {name: path for name, path in selected.items()
               if name.startswith('wheels/') and name.endswith('.whl')}
     if not wheels and not allow_online:
@@ -164,4 +191,5 @@ def main():
 
 
 if __name__ == '__main__':
+    sys.path.insert(0, str(ROOT))
     main()

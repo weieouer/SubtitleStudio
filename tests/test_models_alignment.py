@@ -9,7 +9,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'backend'))
 from core import model_manager as models
@@ -92,29 +92,52 @@ class DownloadTests(unittest.TestCase):
             with self.assertRaises(ValueError): self.download.start(name)
 
     def test_runtime_install_falls_back_and_checks_import_before_ready(self):
-        processes=[SimpleNamespace(poll=lambda:1,returncode=1),SimpleNamespace(poll=lambda:0,returncode=0)]
+        processes = [Mock(poll=Mock(return_value=code), returncode=code) for code in (1, 0, 0)]
         location=models.ENGINE_DIR/'qwen'
         with patch.object(models,'runtime_ready',return_value=False),patch.object(models,'desired_torch',return_value='cpu'), \
              patch.object(models.venv,'EnvBuilder') as builder, \
-             patch.object(models.subprocess,'Popen',side_effect=processes) as install, \
-             patch.object(models.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as verify:
+             patch.object(models.subprocess,'Popen',side_effect=processes) as child:
             builder.return_value.create.side_effect=lambda path:Path(path).mkdir(parents=True,exist_ok=True)
             self.download._prepare('qwen')
-            self.assertEqual(install.call_count,2)
-            self.assertIn(models.RUNTIME_INDEXES[0],install.call_args_list[0].args[0])
-            self.assertIn(models.RUNTIME_INDEXES[1],install.call_args_list[1].args[0])
-            self.assertIn('Qwen3ForcedAligner',verify.call_args.args[0][-1])
+            self.assertEqual(child.call_count, 3)
+            self.assertIn(models.RUNTIME_INDEXES[0],child.call_args_list[0].args[0])
+            self.assertIn(models.RUNTIME_INDEXES[1],child.call_args_list[1].args[0])
+            self.assertIn('Qwen3ForcedAligner',child.call_args.args[0][-1])
             self.assertTrue((location/'ready.json').exists())
 
     def test_runtime_import_failure_does_not_mark_ready(self):
         location=models.ENGINE_DIR/'qwen'
+        processes = [Mock(poll=Mock(return_value=code), returncode=code) for code in (0, 1)]
         with patch.object(models,'runtime_ready',return_value=False),patch.object(models,'desired_torch',return_value='cpu'), \
              patch.object(models.venv,'EnvBuilder') as builder, \
-             patch.object(models.subprocess,'Popen',return_value=SimpleNamespace(poll=lambda:0,returncode=0)), \
-             patch.object(models.subprocess,'run',return_value=SimpleNamespace(returncode=1)):
+             patch.object(models.subprocess,'Popen',side_effect=processes):
             builder.return_value.create.side_effect=lambda path:Path(path).mkdir(parents=True,exist_ok=True)
             with self.assertRaises(RuntimeError):self.download._prepare('qwen')
             self.assertFalse((location/'ready.json').exists())
+
+    def test_qwen_probe_preserves_traceback_on_timeout(self):
+        log = io.StringIO()
+
+        def slow_probe(command, output, environment, *, timeout):
+            self.assertEqual(timeout, 240)
+            self.assertIn('dump_traceback_later(235)', command[-1])
+            output.write('stack in slow native audio import\n')
+            raise models.subprocess.TimeoutExpired(command, timeout)
+
+        with patch.object(self.download, '_run_child', side_effect=slow_probe):
+            self.assertFalse(self.download._probe_engine('qwen', {}, log))
+        self.assertIn('stack in slow native audio import', log.getvalue())
+        self.assertIn('加载超过 240 秒', log.getvalue())
+
+    def test_cancel_during_probe_terminates_process(self):
+        child = Mock(poll=Mock(return_value=None))
+        cancel_event = Mock(is_set=Mock(side_effect=(False, False, True)))
+        download = models.ModelDownloads(cancel_event=cancel_event)
+        with patch.object(models.subprocess, 'Popen', return_value=child):
+            with self.assertRaises(models.DownloadCancelled):
+                download._probe_engine('qwen', {})
+        child.terminate.assert_called_once()
+        child.wait.assert_called_once_with(timeout=10)
 
     def test_cuda_torch_installed_before_engine_packages(self):
         location=models.ENGINE_DIR/'qwen'
@@ -141,7 +164,7 @@ class DownloadTests(unittest.TestCase):
     def test_failed_cuda_install_restores_cpu_and_keeps_runtime_ready(self):
         location=models.ENGINE_DIR/'qwen'
         processes=[SimpleNamespace(poll=lambda:1,returncode=1),SimpleNamespace(poll=lambda:0,returncode=0),
-                   SimpleNamespace(poll=lambda:0,returncode=0)]
+                   SimpleNamespace(poll=lambda:0,returncode=0),SimpleNamespace(poll=lambda:0,returncode=0)]
         def fake_run(command,**kwargs):
             return SimpleNamespace(returncode=0,stdout='',stderr='')
         with patch.object(models,'runtime_ready',return_value=False),patch.object(models,'desired_torch',return_value='cuda'), \
@@ -150,7 +173,7 @@ class DownloadTests(unittest.TestCase):
              patch.object(models.subprocess,'run',side_effect=fake_run):
             builder.return_value.create.side_effect=lambda path:Path(path).mkdir(parents=True,exist_ok=True)
             self.download._prepare('qwen')
-            self.assertEqual(install.call_count,3)   # CUDA 失败 + CPU 恢复 + 引擎依赖
+            self.assertEqual(install.call_count,4)   # CUDA 失败 + CPU 恢复 + 引擎依赖 + 自检
             self.assertIn('--force-reinstall',install.call_args_list[0].args[0])
             marker=json.loads((location/'ready.json').read_text(encoding='utf-8'))
             self.assertEqual(marker['torch'],'cpu')
@@ -171,7 +194,7 @@ class DownloadTests(unittest.TestCase):
         with patch.object(models.subprocess,'Popen',return_value=SimpleNamespace(poll=lambda:0,returncode=0)) as install, \
              patch.object(models.subprocess,'run',side_effect=fake_run):
             self.download._run_gpu(['qwen'])
-            command=install.call_args.args[0]
+            command=install.call_args_list[0].args[0]
             self.assertIn(models.engine_config()['torch']['cuda_index'],command)
             self.assertIn('--force-reinstall',command)
             self.assertIn('--upgrade',command)

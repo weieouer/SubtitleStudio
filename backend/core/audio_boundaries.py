@@ -149,7 +149,7 @@ def _compact_edge_word(words, at_end=False):
     for left,right in pairs:
         if not -.001<=float(right['start'])-float(left['end'])<=.20+.001:break
         connected+=1
-    return (length>0 and .02<=span<=min(.8,max(.32,length*.25))
+    return (length>0 and .02-.001<=span<=min(.8,max(.32,length*.25))+.001
             and -.001<=gap<=.16+.001 and connected>0)
 
 

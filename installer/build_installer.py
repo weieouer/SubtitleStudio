@@ -42,6 +42,9 @@ def find_iscc(explicit: str | None) -> Path:
     env = os.environ.get('INNO_SETUP_ISCC')
     candidates = [Path(env)] if env else []
     candidates += [
+        Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs' / 'Inno Setup 7' / 'ISCC.exe',
+        Path(r'C:\Program Files\Inno Setup 7\ISCC.exe'),
+        Path(r'C:\Program Files (x86)\Inno Setup 7\ISCC.exe'),
         Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs' / 'Inno Setup 6' / 'ISCC.exe',
         Path(r'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'),
         Path(r'C:\Program Files\Inno Setup 6\ISCC.exe'),
@@ -63,11 +66,13 @@ def stage_release(stage: Path, offline: bool, bundled=False) -> int:
     build_root = (INSTALLER / 'build').resolve()
     if stage.is_symlink() or not stage.resolve().is_relative_to(build_root) or stage.resolve() == build_root:
         raise ValueError('暂存目录必须位于 installer/build 内，不能指向源码或其他目录')
-    stage = stage.resolve()
-    files = package_release.selected_files(ROOT, include_work=False)
+    with package_release.release_files(ROOT, include_work=False, bundled=bundled) as files:
+        return copy_stage(stage.resolve(), files, offline=offline, bundled=bundled)
+
+
+def copy_stage(stage: Path, files, *, offline: bool, bundled: bool) -> int:
     # Only ship what the app needs to run: no dev docs, no test suite.
-    runtime_files = {'run.bat', 'requirements.txt', 'requirements-lock.txt',
-                     'config/engines.json', 'config/ui.json',
+    runtime_files = {'run.bat', 'requirements.txt', 'config/engines.json', 'config/firered.json', 'config/ui.json',
                      'tools/bootstrap.py', 'tools/pip_progress.py'}
     files = {name: path for name, path in files.items()
              if name.startswith(('backend/', 'frontend/', 'runtime/')) or name in runtime_files

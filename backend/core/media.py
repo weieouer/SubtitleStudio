@@ -377,11 +377,8 @@ def open_path(path: str) -> None:
     if not p.exists():
         raise FileNotFoundError(path)
     if os.name == "nt":
-        if p.is_dir():
-            os.startfile(str(p))  # type: ignore[attr-defined]
-        else:
-            import subprocess
-            subprocess.Popen(["explorer", "/select,", str(p)])
+        from .file_dialog import open_in_explorer
+        open_in_explorer(p.resolve())
     else:
         import subprocess
         subprocess.Popen(["open" if os.name == "posix" else "xdg-open", str(p.parent if p.is_file() else p)])

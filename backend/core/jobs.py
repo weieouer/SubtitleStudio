@@ -12,7 +12,7 @@ from .asr import Cancelled, transcribe
 from .hallucination import mark as mark_hallucination
 from .interjections import mark_interjections, strip_interjection_cues
 from .paths import RESULTS_DIR
-from .segment import (split_on_gaps, segment_cues, segment_alignment_cues,
+from .segment import (split_on_gaps, split_script_cues, segment_cues, segment_alignment_cues,
                       repair_fragments)
 from .storage import atomic_json
 from .srt_io import format_srt
@@ -40,6 +40,7 @@ class Job:
         self.subtitle_path = ""
         self.task = "asr"
         self.input_cues = []
+        self.script_document = None
         self.cues: list[dict] = []
         self.info: dict = {}
         self.created = time.time()
@@ -84,10 +85,11 @@ class JobManager:
 
     def submit(self, path: str, model: str, device: str, vad: bool, gap_seconds: float = 0.6,
                request_id: str | None = None, task: str = "asr", input_cues: list | None = None, max_width: float = 20,
-               keep_interjections: bool = False, width_split: bool = True) -> Job:
+               keep_interjections: bool = False, width_split: bool = True, script_document=None) -> Job:
         job = Job(path, model, device, vad, gap_seconds, keep_interjections)
         job.task = task
         job.input_cues = input_cues or []
+        job.script_document = script_document
         job.max_width = max_width
         job.width_split = width_split
         with self.lock:
@@ -95,8 +97,8 @@ class JobManager:
                 previous = self.jobs[request_id]
                 if (previous.path, previous.model, previous.device, previous.vad, previous.gap_seconds,
                         previous.task, previous.input_cues, previous.max_width, previous.keep_interjections,
-                        previous.width_split) != (path, model, device, vad, gap_seconds,
-                                                  task, input_cues or [], max_width, keep_interjections, width_split):
+                        previous.width_split, previous.script_document) != (path, model, device, vad, gap_seconds,
+                                                  task, input_cues or [], max_width, keep_interjections, width_split, script_document):
                     raise ValueError("同一任务标识不能提交不同素材或参数")
                 return previous
             if request_id:
@@ -203,6 +205,7 @@ class JobManager:
                     # 再按 width_split 把过长条目按“每行字数”分段衔接后面；不合并碎片、不改字词。
                     # 停顿切点会参考剧本：同一句内按停顿阈值决定，参考明确断句处强制拆开。
                     if job.task == 'align':
+                        cues, info['script_splits'] = split_script_cues(cues, job.script_document)
                         cues, gap_splits = split_on_gaps(cues, job.gap_seconds, job.max_width)
                         # 0 表示关闭停顿拆条；不写入 0 值，避免界面上出现“已按停顿处理”。
                         if job.gap_seconds > 0:

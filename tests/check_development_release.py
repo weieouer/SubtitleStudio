@@ -15,7 +15,8 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from tools.package_release import selected_files
+from tools.development import process_environment, uv_executable
+from tools.package_release import release_files, selected_files
 
 
 def stop_process(pid):
@@ -62,7 +63,7 @@ def inspect_server(info, expected_root):
 
 def package_list(python):
     return json.loads(subprocess.check_output(
-        [str(python), '-m', 'pip', 'list', '--format=json', '--disable-pip-version-check'],
+        [uv_executable(), 'pip', 'list', '--python', str(python), '--format', 'json'],
         encoding='utf-8'))
 
 
@@ -113,7 +114,7 @@ def main():
                             development_state.write_bytes(previous_state)
 
         portable = temporary_root / 'SubtitleStudio'
-        files = selected_files(ROOT, include_work=False)
+        files = selected_files(ROOT, include_work=False, bundled=True)
         source_only = temporary_root / 'SourceOnly'
         for relative, source in files.items():
             if relative.startswith(('runtime/', 'wheels/')) or relative == 'run.bat':
@@ -122,22 +123,29 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
         source_ready = temporary_root / 'source-ready.json'
+        source_environment = process_environment(source_only / '.venv')
+        source_environment.pop('VIRTUAL_ENV', None)
+        source_environment['SUBTITLESTUDIO_READY_FILE'] = str(source_ready)
+        uv = uv_executable()
+        subprocess.run([uv, 'sync', '--locked'], cwd=source_only, env=source_environment, check=True)
         with (temporary_root / 'source-server.log').open('wb') as output:
-            process = subprocess.Popen([str(base_python), str(source_only / 'main.py'), '--port', '0', '--no-browser'],
+            process = subprocess.Popen([uv, 'run', '--locked', 'python', 'main.py',
+                                        '--port', '0', '--no-browser'],
                                        cwd=source_only, stdout=output, stderr=subprocess.STDOUT,
-                                       env={**os.environ, 'SUBTITLESTUDIO_READY_FILE': str(source_ready),
-                                            'SUBTITLESTUDIO_DEV_VENV': str(prefix)})
+                                       env=source_environment)
             try:
                 results['source_only_startup'] = inspect_server(wait_ready(source_ready, process), source_only)
-                assert not any((source_only / name).exists() for name in ('runtime', 'wheels', 'run.bat', '.venv'))
+                assert (source_only / '.venv/pyvenv.cfg').is_file()
+                assert not any((source_only / name).exists() for name in ('runtime', 'wheels', 'run.bat'))
                 results['source_only_startup']['no_portable_resources_required'] = True
             finally:
                 stop_process(process.pid)
                 process.wait(timeout=10)
-        for relative, source in files.items():
-            target = portable / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+        with release_files(ROOT, include_work=False) as release:
+            for relative, source in release.items():
+                target = portable / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
         assert not (portable / '.venv').exists()
         assert not (portable / 'data/models').exists()
         print('Testing first start from a clean portable copy...', flush=True)

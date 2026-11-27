@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _files():
-    patterns = [ROOT / "main.py", ROOT / "requirements-lock.txt",
+    patterns = [ROOT / "main.py", ROOT / "pyproject.toml", ROOT / ".python-version", ROOT / "uv.lock",
                 *ROOT.glob("tools/**/*.py"), *ROOT.glob("backend/**/*.py"),
                 *ROOT.glob("frontend/**/*.js"), *ROOT.glob("frontend/**/*.html"),
                 *ROOT.glob("frontend/**/*.css"), *ROOT.glob("frontend/assets/*"),

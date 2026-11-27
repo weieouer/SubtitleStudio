@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parents[1]
 DESTINATION = ROOT / 'installer/build/prepared-runtime'
 # 构建配方变化时必须让旧运行库失效；修改本脚本或下面的配置文件时同步递增。
-RECIPE_VERSION = 6
+RECIPE_VERSION = 7
 LAYOUT = ('python/python.exe', 'python/pythonw.exe', 'ml/python.exe',
           'ml/Lib/site-packages/torch/__init__.py',
           'ml/Lib/site-packages/qwen_asr/__init__.py',
@@ -28,6 +28,7 @@ LAYOUT = ('python/python.exe', 'python/pythonw.exe', 'ml/python.exe',
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from backend.core.windows_runtime import VC_DLLS
+from tools.development import environment_path
 from tools.prepare_vc_runtime import copy_crt
 LAYOUT += tuple(f'{environment}/{name}' for environment in ('python', 'ml') for name in VC_DLLS)
 
@@ -56,25 +57,28 @@ def _python_identity():
     return f'unknown-{executable.stat().st_size}'
 
 
-def runtime_key(cuda=False):
+def runtime_key(cuda=False, *, environment: Path | None = None):
     """配方指纹覆盖脚本、锁文件、引擎配置、SDK 固定版本与解释器身份。"""
     digest = hashlib.sha256()
     digest.update(f'recipe={RECIPE_VERSION}\ntorch={"cuda" if cuda else "cpu"}\n'.encode())
     digest.update(Path(__file__).read_bytes())
     digest.update((Path(__file__).with_name('prepare_vc_runtime.py')).read_bytes())
     digest.update((Path(__file__).resolve().parents[1] / 'backend/core/windows_runtime.py').read_bytes())
-    for name in ('requirements-lock.txt', 'config/engines.json', 'config/firered.json'):
+    for name in ('uv.lock', 'config/engines.json', 'config/firered.json'):
         path = ROOT / name
         if path.is_file():
             digest.update(name.encode() + b'\n' + path.read_bytes() + b'\n')
     digest.update(_python_identity().encode())
-    for environment in ('.venv','data/engines/qwen'):
-        for metadata in sorted((ROOT/environment/'Lib/site-packages').glob('*.dist-info/METADATA')):
-            digest.update(metadata.relative_to(ROOT).as_posix().encode()+b'\0'+metadata.read_bytes()+b'\0')
+    source_environment = environment or environment_path(root=ROOT)
+    for label, source in (('core', source_environment), ('qwen', ROOT / 'data/engines/qwen')):
+        site_packages = source / 'Lib/site-packages'
+        digest.update(label.encode() + b'\0')
+        for metadata in sorted(site_packages.glob('*.dist-info/METADATA')):
+            digest.update(metadata.relative_to(site_packages).as_posix().encode() + b'\0' + metadata.read_bytes() + b'\0')
     return digest.hexdigest()
 
 
-def prepared_runtime(base=None):
+def prepared_runtime(base=None, *, environment: Path | None = None):
     """复用前统一校验清单、配方指纹和关键文件，缺失时返回可读原因。"""
     base = Path(base or DESTINATION)
     try:
@@ -91,7 +95,7 @@ def prepared_runtime(base=None):
     cuda = info.get('torch_flavor') == 'cuda'
     if info.get('torch_flavor') not in ('cpu', 'cuda'):
         return {'ready': False, 'reason': '运行库未记录 CPU/CUDA 类型', 'manifest': info}
-    if info.get('dependency_sha256') != runtime_key(cuda):
+    if info.get('dependency_sha256') != runtime_key(cuda, environment=environment):
         return {'ready': False, 'reason': '运行库与当前构建配方不一致，需要重新准备', 'manifest': info}
     return {'ready': True, 'reason': '', 'manifest': info}
 
@@ -141,13 +145,13 @@ def download(url, destination, attempts=3):
 
 
 def cached_wheel(name, version):
-    """固定 FireRed 额外依赖的版本，构建机断网时也能从已缓存的 wheel 安装。"""
+    """复用固定版本的本地 wheel，缺失时交给包管理器下载。"""
     stem = re.sub(r'[-_.]+', '_', name).lower()
     for path in (ROOT / 'data/cache/runtime-build/wheels').glob('*.whl'):
         parts = path.name[:-4].split('-')
         if len(parts) >= 2 and re.sub(r'[-_.]+', '_', parts[0]).lower() == stem and parts[1] == version:
             return str(path)
-    raise RuntimeError(f'缺少已缓存的依赖 wheel：{name}=={version}；请先放入 data/cache/runtime-build/wheels')
+    return f'{name}=={version}'
 
 
 def check_dependencies(python):
@@ -163,7 +167,7 @@ def check_dependencies(python):
 def install(python, packages, cuda=False):
     if not cuda:
         packages = local_cached_wheels(packages)
-    index = 'https://download.pytorch.org/whl/cu126' if cuda else 'https://pypi.org/simple'
+    index = 'https://download.pytorch.org/whl/cu126' if cuda else 'https://mirrors.aliyun.com/pypi/simple'
     run(python, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-input',
         '--timeout', '120', '--retries', '3', '--index-url', index, *packages)
 
@@ -260,10 +264,13 @@ def firered_source(target):
 
 
 def freeze(python):
-    """记录实际装入的包，便于排查“锁文件相同但站包不同”的机器差异。"""
-    result = subprocess.run([str(python), '-I', '-m', 'pip', 'freeze'], cwd=ROOT, env=clean_environment(),
-                            capture_output=True, text=True, encoding='utf-8', errors='replace')
-    return [line.strip() for line in (result.stdout or '').splitlines() if line.strip()] if result.returncode == 0 else []
+    """通过标准库读取实际装入的包，主运行库无需 pip。"""
+    code = ('import importlib.metadata as metadata, json; '
+            'print(json.dumps(sorted({f"{dist.metadata[\"Name\"]}=={dist.version}" '
+            'for dist in metadata.distributions()}, key=str.casefold)))')
+    result = subprocess.check_output([str(python), '-I', '-c', code], cwd=ROOT,
+                                     env=clean_environment(), encoding='utf-8')
+    return json.loads(result)
 
 
 def defer_japanese_tokenizer(python):
@@ -288,7 +295,7 @@ def prepare(cuda=False):
     marker.unlink(missing_ok=True)
     print('准备主程序的完整便携运行环境…', flush=True)
     core = clone_python(DESTINATION / 'python')
-    packages_from(ROOT / '.venv/Lib/site-packages', core.parent)
+    packages_from(environment_path(root=ROOT) / 'Lib/site-packages', core.parent)
     run(core, '-I', '-c', 'import av,numpy,faster_whisper,jieba,rapidfuzz,pypinyin,onnxruntime')
     print('准备 Qwen、FireRed 的共享推理环境…', flush=True)
     ml = clone_python(DESTINATION / 'ml')
@@ -297,7 +304,7 @@ def prepare(cuda=False):
     if cuda:
         torch = [name.replace('2.9.1', '2.9.1+cu126').replace('0.24.1', '0.24.1+cu126') for name in torch]
     install(ml, torch, cuda=cuda)
-    # Qwen 与 FireRed 共用的推理依赖；版本与 requirements-lock.txt 保持一致。
+    # Qwen 与 FireRed 共用的推理依赖，按引擎兼容性独立固定版本。
     install(ml, ['numpy==2.2.6', 'av==19.0.2', 'onnxruntime==1.31.1',
                  'opencv-python-headless==4.12.0.88', 'Pillow==12.0.0',
                  'scipy==1.16.3', 'imageio==2.37.0', 'einops==0.8.1',

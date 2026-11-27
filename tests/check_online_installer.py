@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main() -> None:
     stage = ROOT / 'installer/build/stage-online'
-    assert (stage / 'run.bat').is_file(), '先运行 py main.py build --stage-only'
+    assert (stage / 'run.bat').is_file(), '先运行 uv run --locked python installer/build_installer.py --stage-only'
     assert not (stage / 'wheels').exists()
     wheels = {path.name: path for path in (ROOT / 'wheels').glob('*.whl')}
     downloads = []

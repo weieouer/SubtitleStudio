@@ -28,7 +28,6 @@ VENV = ROOT / '.venv'
 VENV_PY = VENV / 'Scripts' / 'python.exe'
 WHEELS = ROOT / 'wheels'
 REQUIREMENTS = ROOT / 'requirements.txt'
-LOCK = ROOT / 'requirements-lock.txt'
 LAUNCH = ROOT / 'backend' / 'launch.py'
 LOG_DIR = ROOT / 'data' / 'logs'
 BOOT_LOG = LOG_DIR / 'bootstrap.log'
@@ -192,7 +191,7 @@ def install_dependencies():
         log('      离线补全未完成，改为联网下载…')
     else:
         log('      包内没有 wheels，正在联网下载…')
-    total = requirement_count(LOCK) or requirement_count(REQUIREMENTS)
+    total = requirement_count(REQUIREMENTS)
     for mirror in MIRRORS:
         log(f'      尝试 {mirror}')
         if execute(install_command(False, mirror), total, '下载') == 0:

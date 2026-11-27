@@ -404,7 +404,8 @@ def align_cues(path, cues, device, on_progress=None, cancel_event=None):
         # 提示里用界面序号（display_id），避免拆条后显示的内部 id 与用户看到的序号不一致。
         skipped = [{'id': c.get('display_id') or c.get('id'), 'reason': c['alignment_error']} for c in result if c.get('alignment_error')]
         # 跳过的条目保留原时间，不参与重叠校驗，避免一条失败拖垮整批。
-        errors = validate_cues([c for c in result if not c.get('alignment_error')], duration)
+        aligned = [c for c in result if not c.get('alignment_error')]
+        errors = validate_cues(aligned, duration) if aligned else []
         if errors:
             raise ValueError('对齐时间校验未通过：'+'；'.join(errors[:3]))
         return result, {'duration':duration,'engine':'Qwen3-ForcedAligner-0.6B','boundary_refinement':'rms_spectral_flux_hysteresis',

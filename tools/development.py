@@ -1,20 +1,23 @@
 """源码开发环境管理；与便携包首次启动流程相互独立。"""
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
-
-from .pip_progress import requirement_count, run as run_pip
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def environment_path(value: str | None = None) -> Path:
-    configured = value or os.environ.get('SUBTITLESTUDIO_DEV_VENV')
-    return (Path(configured).expanduser() if configured else ROOT / '.venv').resolve()
+def environment_path(value: str | None = None, *, root: Path = ROOT) -> Path:
+    if value:
+        return Path(value).expanduser().resolve()
+    uv_environment = os.environ.get('UV_PROJECT_ENVIRONMENT')
+    if uv_environment:
+        return (root / Path(uv_environment)).resolve()
+    legacy_environment = os.environ.get('SUBTITLESTUDIO_DEV_VENV')
+    return Path(legacy_environment).expanduser().resolve() if legacy_environment else (root / '.venv').resolve()
 
 
 def python_path(environment: Path) -> Path:
@@ -28,6 +31,7 @@ def process_environment(environment: Path | None = None) -> dict:
     result.update(PYTHONNOUSERSITE='1', PYTHONUTF8='1', PIP_REQUIRE_VIRTUALENV='true',
                   PIP_DISABLE_PIP_VERSION_CHECK='1', PIP_CACHE_DIR=str(ROOT / 'data/cache/pip'))
     if environment is not None:
+        result['UV_PROJECT_ENVIRONMENT'] = str(environment)
         result['SUBTITLESTUDIO_DEV_VENV'] = str(environment)
     return result
 
@@ -48,6 +52,10 @@ def validate_environment(environment: Path) -> Path:
         if settings.get('include-system-site-packages') != 'false':
             raise ValueError('开发环境必须关闭全局包继承；原目录已保留')
         python = python_path(environment)
+        if sys.prefix != sys.base_prefix and Path(sys.prefix).resolve() == environment:
+            if sys.version_info[:2] != (3, 13):
+                raise ValueError('开发环境需要 Python 3.13；请另选虚拟环境目录')
+            return python
         code = ('import sys; from pathlib import Path; '
                 f'assert sys.prefix != sys.base_prefix and Path(sys.prefix).resolve() == Path({str(environment)!r}); '
                 'assert sys.version_info[:2] == (3, 13)')
@@ -55,45 +63,34 @@ def validate_environment(environment: Path) -> Path:
                        env=process_environment(environment), timeout=30)
         return python
     except (OSError, subprocess.SubprocessError) as error:
-        raise ValueError('开发虚拟环境不存在或不可用，请运行 py -3.13 main.py setup；原目录已保留') from error
+        raise ValueError('开发虚拟环境不存在或不可用，请运行 uv sync --locked；已有目录会保留') from error
 
 
-def install_command(python: Path, wheels: Path | None = None, index: str | None = None) -> list[str]:
-    command = [str(python), '-I', '-m', 'pip', '--isolated', '--cache-dir', str(ROOT / 'data/cache/pip'),
-               'install', '--disable-pip-version-check', '--no-input', '-r', str(ROOT / 'requirements.txt')]
-    if (ROOT / 'requirements-lock.txt').is_file():
-        command += ['-c', str(ROOT / 'requirements-lock.txt')]
-    if wheels is not None:
-        command += ['--no-index', '--only-binary=:all:', '--find-links', str(wheels)]
-    elif index:
-        command += ['--index-url', index, '--timeout', '20', '--retries', '1']
-    return command
+def uv_executable() -> str:
+    executable = shutil.which('uv')
+    if executable is None:
+        raise RuntimeError('找不到 uv，请安装 uv 并确认它在 PATH 中')
+    return executable
+
+
+def export_requirements(destination: Path, *, root: Path = ROOT) -> None:
+    # jieba 的离线 wheel 由源码构建，不能使用 PyPI 源码包的哈希做 wheel 校验。
+    subprocess.run(
+        [uv_executable(), 'export', '--project', str(root), '--locked', '--no-hashes',
+         '--no-annotate', '--no-header', '--output-file', str(destination), '--quiet'],
+        cwd=root, check=True,
+    )
 
 
 def setup_environment(environment: Path) -> Path:
-    if sys.version_info[:2] != (3, 13):
-        raise ValueError('开发环境使用 Python 3.13，请运行 py -3.13 main.py setup')
     validate_target(environment)
-    if not environment.exists():
-        environment.parent.mkdir(parents=True, exist_ok=True)
-        base = getattr(sys, '_base_executable', None) or sys.executable
-        print(f'创建项目虚拟环境：{environment}', flush=True)
-        subprocess.run([str(base), '-I', '-m', 'venv', str(environment)], check=True)
+    if environment.exists():
+        validate_environment(environment)
+    child_environment = process_environment(environment)
+    subprocess.run([uv_executable(), 'sync', '--project', str(ROOT), '--locked', '--no-active'],
+                   cwd=ROOT, env=child_environment, check=True)
     python = validate_environment(environment)
-    wheels = ROOT / 'wheels'
-    attempts = [install_command(python, wheels=wheels)] if any(wheels.glob('*.whl')) else []
-    configuration = json.loads((ROOT / 'config/engines.json').read_text(encoding='utf-8'))
-    attempts += [install_command(python, index=index) for index in configuration['indexes']]
-    total = requirement_count(ROOT / 'requirements-lock.txt')
-    # pip 被固定到验证过的虚拟环境解释器；--isolated 忽略用户的全局安装重定向设置。
-    for command in attempts:
-        if run_pip(command, total=total, label='安装项目依赖', env=process_environment(environment)) == 0:
-            break
-    else:
-        raise RuntimeError('项目依赖安装失败，请查看 data/logs/pip.log')
-    subprocess.run([str(python), '-I', '-m', 'pip', 'check'], check=True,
-                   env=process_environment(environment))
     subprocess.run([str(python), '-I', '-c', 'import av, faster_whisper, numpy, jieba, rapidfuzz, pypinyin'],
-                   check=True, env=process_environment(environment))
+                   check=True, env=child_environment)
     print(f'开发环境已就绪：{python}', flush=True)
     return python

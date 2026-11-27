@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -667,14 +668,18 @@ class ModelDownloads:
                     raise
                 self.cancel_event.wait(1 + attempt)
 
-    def _install(self, command, output, environment):
-        """运行一次 pip 安装并等待结束；取消时终止子进程。"""
+    def _run_child(self, command, output, environment, *, timeout=None):
+        """将子进程输出写入文件，取消或达到时限时终止子进程。"""
+        self.check()
+        deadline = time.monotonic() + timeout if timeout is not None else float('inf')
         process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
                                    env=environment,
                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         try:
             while process.poll() is None:
                 self.check()
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(command, timeout)
                 self.cancel_event.wait(.5)
             return process.returncode
         finally:
@@ -695,7 +700,7 @@ class ModelDownloads:
             command = [str(runtime_python(engine)), '-m', 'pip', 'install', '--disable-pip-version-check',
                        '--progress-bar', 'on', '--index-url', index, '--timeout', '60',
                        '--retries', '2', '--no-input', '--upgrade', '--force-reinstall', *packages]
-            if self._install(command, output, environment) == 0:
+            if self._run_child(command, output, environment) == 0:
                 return True
         return False
 
@@ -718,20 +723,29 @@ class ModelDownloads:
         return None
 
     def _probe_engine(self, engine, environment, output=None):
-        """在目标环境里 import 引擎入口；失败时把输出留在安装日志里。"""
-        try:
-            probe = subprocess.run([str(runtime_python(engine)), '-c', engine_spec(engine)["probe"]],
-                                   capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=90, env=environment,
-                                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-        except (OSError, subprocess.SubprocessError) as error:
+        """在目标解释器中加载引擎，保留超时前的 Python 堆栈。"""
+        # Qwen 首次导入要加载 Torch 和音频原生扩展，Windows 冷启动可能超过 90 秒。
+        timeout = 240 if engine == 'qwen' else 90
+        probe_code = f'import faulthandler\nfaulthandler.dump_traceback_later({timeout - 5})\n' + engine_spec(engine)['probe']
+        command = [str(runtime_python(engine)), '-c', probe_code]
+        started = time.monotonic()
+        failure = ''
+        with tempfile.TemporaryFile(mode='w+', encoding='utf-8', errors='replace') as transcript:
+            try:
+                returncode = self._run_child(command, transcript, environment, timeout=timeout)
+                if returncode:
+                    failure = f'子进程退出码 {returncode}'
+            except subprocess.TimeoutExpired:
+                failure = f'加载超过 {timeout} 秒'
+            except (OSError, subprocess.SubprocessError) as error:
+                failure = str(error) or type(error).__name__
             if output is not None:
-                output.write('\n引擎自检失败：'+str(error)+'\n'); output.flush()
-            return False
-        if output is not None:
-            text = str(getattr(probe, 'stdout', '') or '') + str(getattr(probe, 'stderr', '') or '')
-            if text:
-                output.write(text); output.flush()
-        return probe.returncode == 0
+                transcript.seek(0)
+                output.write(transcript.read())
+                result = f'失败：{failure}' if failure else '通过'
+                output.write(f'\n{engine} 引擎自检{result}（{time.monotonic() - started:.1f} 秒）\n')
+                output.flush()
+        return not failure
 
     def _mark_torch(self, engine, flavor, cuda_available=None, gpu_error=''):
         """只更新 ready.json 的 GPU 字段，保留原 packages/indexes/prepared。"""
@@ -809,11 +823,12 @@ class ModelDownloads:
                 command=[str(runtime_python(engine)),'-m','pip','install','--disable-pip-version-check',
                          '--progress-bar','on','--index-url',index,'--timeout','15','--retries','1',
                          '--no-input',*packages]
-                if self._install(command, output, environment) == 0:
+                if self._run_child(command, output, environment) == 0:
                     succeeded=True;break
             if not succeeded:
                 raise RuntimeError('模型已保存，多个安装源均未能完成环境安装。日志：'+str(log))
             patch_nagisa_model_path(engine)
+            self.update(progress=.96, message='依赖已安装，正在加载并验证引擎。首次加载可能较慢…')
             probe_ok = self._probe_engine(engine, environment, output)
             if not probe_ok and torch_flavor == "cuda":
                 # CUDA 版能导入但引擎加载失败时，退回 CPU 再自检一次。
@@ -897,7 +912,7 @@ class ModelDownloads:
                        'torch==2.9.1+cu126', 'torchvision==0.24.1+cu126', 'torchaudio==2.9.1+cu126']
             self.update(status='preparing', progress=.1, message='下载并配置 GPU 运行库，约 2.6 GB；CPU 环境保留…')
             with (location / 'install.log').open('a', encoding='utf-8') as log:
-                if self._install(command, log, environment):
+                if self._run_child(command, log, environment):
                     raise RuntimeError('GPU 配置未完成，可重试；CPU 内置环境仍可使用。日志：' + str(location / 'install.log'))
             self.check()
             probe = subprocess.run([str(python), '-c',
@@ -999,7 +1014,8 @@ class ModelDownloads:
         except DownloadCancelled:
             self.update(status="cancelled", message="下载已暂停，文件片段保留，点击下载可继续", speed_bps=0)
         except Exception as error:
-            self.update(status="error", error=str(error), message="模型下载失败：" + str(error), speed_bps=0)
+            prefix = '模型权重已保存，运行环境准备失败：' if self.get()['status'] == 'preparing' else '模型下载失败：'
+            self.update(status="error", error=str(error), message=prefix + str(error), speed_bps=0)
 
 
 DOWNLOADS = ModelDownloads()

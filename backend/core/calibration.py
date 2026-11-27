@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from . import srt_io
+from .reference_match import exact_match_segments
 
 
 def _confirmed(match):
@@ -27,6 +28,9 @@ def normalize_cues(cues, keep_punc=True, reference_fingerprint=None):
         match = cue.get('reference_match') or {}
         reference = match.get('reference') or {}
         current = str(cue.get('text') or '')
+        segments = exact_match_segments(match,current)
+        if segments:
+            reference = {'text':''.join(part['text'] for part in segments)}
         done = cue.get('modification_complete')
         if (cue.get('review_decision') in ('manual', 'included', 'kept')
                 and isinstance(done, dict) and done.get('text') == current and current):

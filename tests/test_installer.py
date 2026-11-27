@@ -74,11 +74,15 @@ class RuntimeRecipeTests(unittest.TestCase):
     def test_recipe_config_and_torch_flavor_change_the_reuse_key(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            for name in ('requirements-lock.txt', 'config/ui.json', 'config/engines.json'):
+            for name in ('uv.lock', 'config/ui.json', 'config/engines.json'):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(name, encoding='utf-8')
             with patch.object(prepare_runtime, 'ROOT', root):
+                first = prepare_runtime.runtime_key()
+                with (root / 'uv.lock').open('a', encoding='utf-8') as lock:
+                    lock.write('\n# changed')
+                self.assertNotEqual(first, prepare_runtime.runtime_key())
                 first = prepare_runtime.runtime_key()
                 (root / 'config/firered.json').write_text('{"revision":"' + 'a' * 40 + '"}', encoding='utf-8')
                 self.assertNotEqual(first, prepare_runtime.runtime_key())
@@ -87,7 +91,7 @@ class RuntimeRecipeTests(unittest.TestCase):
     def test_prepared_runtime_requires_matching_key_and_layout_files(self):
         with tempfile.TemporaryDirectory() as folder:
             base = Path(folder)
-            for name in ('requirements-lock.txt', 'config/ui.json', 'config/engines.json'):
+            for name in ('uv.lock', 'config/ui.json', 'config/engines.json'):
                 path = base / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(name, encoding='utf-8')
@@ -114,9 +118,18 @@ class InstallerTests(unittest.TestCase):
         script=(ROOT/'installer/SubtitleStudio.iss').read_text(encoding='utf-8')
         files=script.split('[Files]',1)[1].split('[Icons]',1)[0]
         self.assertIn('Flags: onlyifdoesntexist',files)
-        self.assertIn('Excludes: "config\\*"',files)
+        # 前导反斜杠只排除根目录 config，避免误删运行库内的 config 目录。
+        self.assertIn('Excludes: "\\config\\*"',files)
         self.assertIn('UsePreviousAppDir=yes',script)
-        self.assertNotIn('[InstallDelete]',script)
+        cleanup=script.split('[InstallDelete]',1)[1].split('[Icons]',1)[0]
+        self.assertIn('Name: "{app}\\runtime"',cleanup)
+        self.assertNotIn('Name: "{app}\\data',cleanup)
+        self.assertNotIn('Name: "{app}\\config',cleanup)
+        uninstall=script.split('[UninstallDelete]',1)[1].split('[Code]',1)[0]
+        for tree in ('runtime','backend','frontend','tools'):
+            self.assertIn(f'Name: "{{app}}\\{tree}"',uninstall)
+        self.assertIn('Name: "{app}\\data"',uninstall)
+        self.assertIn('Name: "{app}\\config"',uninstall)
         self.assertIn('AppId={{FFE1553D-606B-4F3E-8460-641574C7776D}',script)
 
     def make_source(self, root):

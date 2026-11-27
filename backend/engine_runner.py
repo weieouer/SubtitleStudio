@@ -47,6 +47,72 @@ def _ascii_copy(path):
         return path
 
 
+def _window_words(align, source, path, cues, target_index, low, high):
+    """同一窗口裁音频、提交对应台词，再将目标句的词时间换回块内坐标。"""
+    import wave
+    from core.alignment_quality import cue_word_slices
+
+    rate = source.getframerate()
+    begin, stop = round(low*rate), round(high*rate)
+    if begin>=stop:
+        return []
+    source.setpos(begin)
+    with wave.open(path, 'wb') as output:
+        output.setparams(source.getparams())
+        output.writeframes(source.readframes(stop-begin))
+    try:
+        words = align(path, '\n'.join(c['text'] for c in cues))
+    except Exception as error:
+        print(f'Local alignment retry failed: {type(error).__name__}', flush=True)
+        return []
+    slices = cue_word_slices(cues,words)
+    if slices is None:
+        return []
+    a,b = slices[target_index]
+    offset = begin/rate
+    return [{**w,'start':w['start']+offset,'end':w['end']+offset} for w in words[a:b]]
+
+
+def _context_windows(cues, i, duration):
+    left = i-1 if i and 0<=cues[i]['start']-cues[i-1]['end']<=1.5 else i
+    right = i+1 if i+1<len(cues) and 0<=cues[i+1]['start']-cues[i]['end']<=1.5 else i
+    # 两侧上下文优先，再试缩短到一侧。音频和文字总是使用同一组邻句。
+    for a,b in dict.fromkeys(((left,right),(i,right),(left,i),(i,i))):
+        low,high = max(0.,cues[a]['start']-.24),min(duration,cues[b]['end']+.24)
+        if 0<high-low<=15:
+            yield a,b,low,high
+
+
+def _same_word_position(a,b):
+    # Qwen 的词时间落在 80 ms 网格上；允许两次观测相差至多两格。
+    return (len(a)==len(b) and bool(a) and a[-1]['end']>a[0]['start'] and b[-1]['end']>b[0]['start']
+            and all(x['text']==y['text'] and abs(x['start']-y['start'])<=.161
+                    and abs(x['end']-y['end'])<=.161 for x,y in zip(a,b)))
+
+
+def _retry_with_context(align, source, path, cues, i, target, retry, low, high, usable):
+    rate = source.getframerate()
+    seen = {(0,len(cues)-1,0,source.getnframes()),(i,i,round(low*rate),round(high*rate))}
+    evidence = [target,retry]
+    valid = []
+    for a,b,lo,hi in _context_windows(cues,i,source.getnframes()/rate):
+        key = (a,b,round(lo*rate),round(hi*rate))
+        if key in seen:
+            continue
+        seen.add(key)
+        observed = _window_words(align,source,path,cues[a:b+1],i-a,lo,hi)
+        if usable(observed):
+            if any(_same_word_position(prior,observed) for prior in evidence):
+                return observed
+            valid.append(observed)
+        else:
+            for prior in valid:
+                if _same_word_position(prior,observed):
+                    return prior
+        evidence.append(observed)
+    return None
+
+
 def align_chunk(model, chunk):
     """正常项仅对齐一次；异常项用原时间附近的上下文重试，复用同一模型。"""
     import tempfile
@@ -88,50 +154,41 @@ def align_chunk(model, chunk):
             # 粗时间本身跨越几十秒时，没有文字定位证据，不能凭能量猜一句在哪。
             if not .05 < span <= max(8., min(15., len(plain(cue['text']))*.8+2.)):
                 continue
-            left = right = i
             # 全局异常时按当前一句的原时间重试，邻句会把短句再次拉向远处。
-            low = max(0., cues[left]['start']-.6)
-            high = min(duration, max(c['end'] for c in cues[left:right+1])+.6)
+            low = max(0.,cue['start']-.6)
+            high = min(duration,cue['end']+.6)
             # 重试只带本句文字，窗口里却保留邻句声音时，短句容易把首字贴到上一句尾音，
             # 或把尾字甩到下面重复出现的相似台词上。主对齐已把本句词放在邻句边界内时，
             # 把窗口收紧到边界，不让邻句语音成为干扰。
-            if left and cues[left-1]['end'] <= cues[left]['start']:
-                edge = cues[left-1]['end']+.08
+            if i and cues[i-1]['end'] <= cue['start']:
+                edge = cues[i-1]['end']+.08
                 if target and target[0]['start'] >= edge-.001:
                     low = max(low, edge)
-            if right+1 < len(cues) and cues[right+1]['start'] >= cues[right]['end']:
-                edge = cues[right+1]['start']-.08
+            if i+1 < len(cues) and cues[i+1]['start'] >= cue['end']:
+                edge = cues[i+1]['start']-.08
                 if target and target[-1]['end'] <= edge+.001:
                     high = min(high, edge)
             if high<=low or high-low>30:
                 continue
             summary['attempted'] += 1
+            previous_end = words[first-1]['end'] if first else 0.
+            if replacements and replacements[-1][1]==first:
+                previous_end = replacements[-1][2][-1]['end']
+            next_start = words[last]['start'] if last<len(words) else duration
+            def usable(candidate):
+                return (bool(candidate) and not cue_timing_issue(cue['text'],candidate,span)
+                        and candidate[0]['start']>=max(previous_end-.001,cue['start']-1.)
+                        and candidate[-1]['end']<=min(next_start+.001,duration+.001,cue['end']+1.))
+
             with tempfile.TemporaryDirectory(prefix='local-align-') as folder:
                 path = str(Path(folder)/'audio.wav')
-                begin, stop = round(low*rate), round(high*rate)
-                source.setpos(begin)
-                with wave.open(path, 'wb') as output:
-                    output.setparams(source.getparams())
-                    output.writeframes(source.readframes(stop-begin))
-                try:
-                    retry = align(path, '\n'.join(c['text'] for c in cues[left:right+1]))
-                except Exception as error:
-                    # 局部重试失败不会丢掉已成功的主结果；取消仍由父进程终止。
-                    print(f'Local alignment retry failed: {type(error).__name__}', flush=True)
+                retry = _window_words(align,source,path,[cue],0,low,high)
+                candidate = retry if usable(retry) else None
+                boundary_issue = issue and issue.startswith(('句首字词','句尾字词'))
+                if candidate is None and (boundary_issue or any(w['start']==w['end'] for w in target+retry)):
+                    candidate = _retry_with_context(align,source,path,cues,i,target,retry,low,high,usable)
+                if candidate is None:
                     continue
-            retry_slices = cue_word_slices(cues[left:right+1], retry)
-            if retry_slices is None:
-                continue
-            a, b = retry_slices[i-left]
-            candidate = [{**w, 'start':w['start']+low, 'end':w['end']+low} for w in retry[a:b]]
-            if cue_timing_issue(cue['text'],candidate,span):
-                continue
-            if (candidate[0]['start']<cue['start']-1. or candidate[-1]['end']>cue['end']+1.
-                    or candidate[-1]['end']>duration+.001):
-                continue
-            if (first and candidate[0]['start']<words[first-1]['end']-.001
-                    or last<len(words) and candidate[-1]['end']>words[last]['start']+.001):
-                continue
             replacements.append((first, last, candidate))
             summary['accepted'] += 1
             summary['unresolved'] -= 1

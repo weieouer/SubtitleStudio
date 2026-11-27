@@ -18,7 +18,6 @@ from tools.development import (
 
 ROOT = Path(__file__).resolve().parent
 
-#wyj
 def run_application(arguments: list[str]) -> int:
     # 后端保留现有 core 模块组织；从任何工作目录启动都使用本项目的源码。
     sys.path.insert(0, str(ROOT / 'backend'))
@@ -53,7 +52,7 @@ def command_parser() -> argparse.ArgumentParser:
     run.add_argument('--no-browser', action='store_true', help='不打开浏览器')
     run.add_argument('--background', action='store_true', help='在后台运行')
     run.add_argument('--console', action='store_true', help=argparse.SUPPRESS)
-    commands.add_parser('setup', parents=[common], help='创建项目虚拟环境并安装/检查依赖')
+    commands.add_parser('setup', parents=[common], help='用 uv 按锁文件同步并检查项目依赖')
     build = commands.add_parser('build', parents=[common], help='构建完整 EXE 安装包，依赖内置，仅模型按需下载')
     build.add_argument('--output', type=Path, default=ROOT / 'dist/full', help='EXE 输出目录，默认 dist/full')
     build.add_argument('--iscc', type=Path, help='Inno Setup 编译器路径')

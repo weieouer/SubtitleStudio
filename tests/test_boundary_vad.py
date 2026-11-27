@@ -21,6 +21,15 @@ def curve(length, runs):
 
 
 class VadPrimitiveTests(unittest.TestCase):
+    def test_compact_edge_threshold_is_stable_at_later_absolute_times(self):
+        words=[{'word':'死','start':99.6,'end':99.92},
+               {'word':'多','start':100.,'end':100.16}]
+        self.assertTrue(boundaries._compact_edge_word(words))
+        shifted=[{**w,'start':w['start']-99.,'end':w['end']-99.} for w in words]
+        self.assertTrue(boundaries._compact_edge_word(shifted))
+        words[0]['start']=99.59
+        self.assertFalse(boundaries._compact_edge_word(words))
+
     def test_one_noise_run_cannot_confirm_edge_against_multiple_interior_words(self):
         words=[{'word':'你','start':.064,'end':.19},{'word':'们','start':.7,'end':.82},
                {'word':'回','start':.85,'end':1.},{'word':'家','start':1.02,'end':1.18}]

@@ -57,7 +57,7 @@ WEB_DIR = FRONTEND_DIR
 OUTPUT_DIR = OUTPUTS_DIR
 PROJECT_DIR = PROJECTS_DIR
 
-VERSION = "4.0.0"
+VERSION = "4.0.2"
 STARTED_AT = time.time()
 SESSION_TOKEN = secrets.token_urlsafe(32)
 DIALOG_LOCK = threading.Lock()
@@ -648,8 +648,17 @@ class Handler(BaseHTTPRequestHandler):
         width_split = body.get('width_split', True)
         if not isinstance(width_split, bool):
             raise ValueError('按字数拆条参数无效')
+        document = validation.mapping(body.get('document') or {}, '剧本')
+        if document:
+            parsed = reference_match.parse_document(document.get('text'), document.get('sources'))
+            fingerprint = document.get('fingerprint', '')
+            if not isinstance(fingerprint,str) or len(fingerprint)>128:
+                raise ValueError('剧本标识无效')
+            document = {'text':parsed['text'], 'sources':parsed['sources'],
+                        'fingerprint':fingerprint}
         job = JOBS.submit(path, "qwen3-forcedaligner-0.6b", device, False, gap_seconds, request_id,
-                          task="align", input_cues=cues, max_width=max_width, width_split=width_split)
+                          task="align", input_cues=cues, max_width=max_width, width_split=width_split,
+                          script_document=document or None)
         self.send_json({"ok": True, "job": job.to_dict(include_cues=False)})
 
     def _create_job(self, body: dict) -> None:

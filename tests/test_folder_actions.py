@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 import app
-from core import media
+from core import media, file_dialog
 
 
 class DialogDirectoryMemoryTests(unittest.TestCase):
@@ -74,19 +74,19 @@ class DialogDirectoryMemoryTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == 'nt', 'Windows 资源管理器')
 class OpenFolderTests(unittest.TestCase):
-    def test_file_is_revealed_with_explorer_select(self):
+    def test_file_is_revealed_through_windows_shell(self):
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder) / '素材 一.mp4'
             target.write_bytes(b'x')
-            with patch('subprocess.Popen') as popen:
+            with patch.object(file_dialog,'open_in_explorer') as reveal:
                 media.open_path(str(target))
-            popen.assert_called_once_with(['explorer', '/select,', str(target)])
+            reveal.assert_called_once_with(target.resolve())
 
-    def test_directory_is_opened_with_startfile(self):
+    def test_directory_is_opened_through_windows_shell(self):
         with tempfile.TemporaryDirectory() as folder:
-            with patch('os.startfile', create=True) as startfile:
+            with patch.object(file_dialog,'open_in_explorer') as reveal:
                 media.open_path(folder)
-            startfile.assert_called_once_with(folder)
+            reveal.assert_called_once_with(Path(folder).resolve())
 
     def test_missing_path_is_reported(self):
         with tempfile.TemporaryDirectory() as folder:

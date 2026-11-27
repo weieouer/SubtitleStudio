@@ -226,15 +226,43 @@ def _piece_words(cue: dict, positions, lo: int, hi: int, start: float, end: floa
     return result, estimated
 
 
-def segment_cue(cue: dict, max_width: float = 20.0, *, split_at=None) -> tuple[list[dict], int]:
+def _distribute_edge_warnings(cue, pieces):
+    warning = cue.get('alignment_warning')
+    if not warning:
+        return
+    messages = re.split(r'；(?=(?:VAD 未确认短[首尾]字|[首尾]字仅由孤立声段支持))',warning)
+    for i,piece in enumerate(pieces):
+        keep = [message for message in messages
+                if not (i and message.startswith(('VAD 未确认短首字','首字仅由孤立声段支持')))
+                and not (i+1<len(pieces) and message.startswith(('VAD 未确认短尾字','尾字仅由孤立声段支持')))]
+        if keep:
+            piece['alignment_warning'] = '；'.join(keep)
+        else:
+            piece.pop('alignment_warning',None)
+
+
+def segment_cue(cue: dict, max_width: float = 20.0, *, split_at=None, reference_cuts=None) -> tuple[list[dict], int]:
     text = cue.get("text") or ""
-    if not text or (split_at is None and text_width(text) <= max_width):
+    if not text or (split_at is None and not reference_cuts and text_width(text) <= max_width):
         return [cue], 0
 
-    char_times = _char_times(text, cue.get("words"))
-    pauses={i:min(2,max(0,char_times[i][0]-char_times[i-1][1])*4)
-            for i in range(1,len(text)) if char_times[i] and char_times[i-1]}
-    chunks = [text[:split_at],text[split_at:]] if split_at is not None else split_text(text, max_width, pauses)
+    positions = _word_positions(text, cue.get('words') or [])
+    if reference_cuts:
+        if positions is None:
+            return [cue], 0
+        # 对齐器可能省略标点，或把两段台词放进同一词时间；仅在这个词内插值。
+        char_times = [None]*len(text)
+        for chars, word in zip(positions, cue['words']):
+            step = (word['end']-word['start'])/len(chars)
+            for j,(at,_) in enumerate(chars):
+                char_times[at] = (word['start']+j*step, word['start']+(j+1)*step)
+        cuts = [0, *reference_cuts, len(text)]
+        chunks = [text[a:b] for a,b in zip(cuts,cuts[1:])]
+    else:
+        char_times = _char_times(text, cue.get("words"))
+        pauses={i:min(2,max(0,char_times[i][0]-char_times[i-1][1])*4)
+                for i in range(1,len(text)) if char_times[i] and char_times[i-1]}
+        chunks = [text[:split_at],text[split_at:]] if split_at is not None else split_text(text, max_width, pauses)
     if len(chunks) <= 1:
         return [cue], 0
 
@@ -255,31 +283,46 @@ def segment_cue(cue: dict, max_width: float = 20.0, *, split_at=None) -> tuple[l
     start_ms, end_ms = round(start * 1000), round(end * 1000)
     if end_ms - start_ms < len(chunks):
         return [dict(cue, needs_review=True, split_skipped=True)], 0
-    boundaries = [start_ms]
-    total = text_width(text) or 1.0
-    for i, (a, _) in enumerate(ranges[1:], 1):
-        left, right = _gap_times(char_times, text, a)
-        if left is not None and right is not None and left[1] <= right[0]:
-            boundary = round((left[1] + right[0]) * 500)
-        else:
-            estimated = True
-            boundary = round((start + (end - start) * text_width(text[:a]) / total) * 1000)
-        boundaries.append(max(boundaries[-1] + 1, min(boundary, end_ms - (len(chunks) - i))))
-    boundaries.append(end_ms)
-    estimated = estimated or not cue.get("words")
-    times = [(a / 1000, b / 1000) for a, b in zip(boundaries, boundaries[1:])]
+    if reference_cuts:
+        times = []
+        for lo,hi in ranges:
+            evidence = [t for t in char_times[lo:hi] if t is not None]
+            if not evidence:
+                return [cue], 0
+            ts = round(max(start,evidence[0][0]) if lo else start, 3)
+            te = round(min(end,evidence[-1][1]) if hi<len(text) else end, 3)
+            if te<=ts or (times and ts<times[-1][1]):
+                return [cue], 0
+            times.append((ts,te))
+    else:
+        boundaries = [start_ms]
+        total = text_width(text) or 1.0
+        for i, (a, _) in enumerate(ranges[1:], 1):
+            left, right = _gap_times(char_times, text, a)
+            if left is not None and right is not None and left[1] <= right[0]:
+                boundary = round((left[1] + right[0]) * 500)
+            else:
+                estimated = True
+                boundary = round((start + (end - start) * text_width(text[:a]) / total) * 1000)
+            boundaries.append(max(boundaries[-1] + 1, min(boundary, end_ms - (len(chunks) - i))))
+        boundaries.append(end_ms)
+        estimated = estimated or not cue.get("words")
+        times = [(a / 1000, b / 1000) for a, b in zip(boundaries, boundaries[1:])]
 
-    positions = _word_positions(text, cue.get('words') or [])
     out: list[dict] = []
     for pi, (chunk, (ts, te), (lo, hi)) in enumerate(zip(chunks, times, ranges)):
         fallback_start, fallback_end = ts, te
         # 按宽度切在词间时直接保留词间空档，不用中点把停顿分给两条。
-        pause_before = lo>0 and char_times[lo] is not None and char_times[lo-1] is not None and char_times[lo-1][1]<char_times[lo][0]
-        pause_after = hi<len(text) and char_times[hi-1] is not None and char_times[hi] is not None and char_times[hi-1][1]<char_times[hi][0]
-        if pause_before:
-            ts=max(ts,char_times[lo][0])
-        if pause_after:
-            te=min(te,char_times[hi-1][1])
+        if reference_cuts:
+            pause_before = pi>0 and ts>times[pi-1][1]
+            pause_after = pi+1<len(times) and te<times[pi+1][0]
+        else:
+            pause_before = lo>0 and char_times[lo] is not None and char_times[lo-1] is not None and char_times[lo-1][1]<char_times[lo][0]
+            pause_after = hi<len(text) and char_times[hi-1] is not None and char_times[hi] is not None and char_times[hi-1][1]<char_times[hi][0]
+            if pause_before:
+                ts=max(ts,char_times[lo][0])
+            if pause_after:
+                te=min(te,char_times[hi-1][1])
         invalid_timing = round(te,3)<=round(ts,3)
         if invalid_timing:
             ts,te=fallback_start,fallback_end
@@ -293,8 +336,8 @@ def segment_cue(cue: dict, max_width: float = 20.0, *, split_at=None) -> tuple[l
             "words": words,
             "estimated": estimated or word_estimated or invalid_timing,
             "source": "split",
-            "segmentation": "dynamic_programming_word_pause",
-            "width_split": text_width(text)>max_width,
+            "segmentation": "script_sentence" if reference_cuts else "dynamic_programming_word_pause",
+            "width_split": not reference_cuts and text_width(text)>max_width,
             "split_parent": f"{cue.get('display_id',cue.get('id',''))}:{start:.3f}:{end:.3f}",
             "script_text": "",
             "script_index": None,
@@ -309,6 +352,7 @@ def segment_cue(cue: dict, max_width: float = 20.0, *, split_at=None) -> tuple[l
         if pause_before:piece['pause_before']=piece['start']
         if pause_after:piece['pause_after']=piece['end']
         out.append(piece)
+    _distribute_edge_warnings(cue,out)
     if cue.get('reference_match') or 'manual_reference' in cue:
         from .reference_match import inherit_reference, inherit_manual_reference
         inherit_manual_reference(cue,out)
@@ -435,10 +479,10 @@ def _reference_break_context(cue: dict):
         return None
     # 句读设置只控制显示；参考中逗号、冒号、省略号等也必须参与拆句。
     sentence_starts = {a for a,b in sentence_ranges(raw) if a}
-    boundaries = range(1,len(query))
-    mapped = _reference_boundaries(query,target,list(boundaries))
-    breaks = {boundary for boundary,hit in zip(boundaries,mapped)
-              if 0 < hit < len(target) and target_positions[hit][0] in sentence_starts}
+    boundaries = [i for i,(start,_) in enumerate(target_positions) if i and start in sentence_starts
+                  and target_positions[i]!=target_positions[i-1]]
+    mapped = _reference_boundaries(target,query,boundaries) if boundaries else []
+    breaks = {k for k in mapped if 0<k<len(query) and positions[k]!=positions[k-1]}
     return [end for start,end in positions], breaks
 
 
@@ -446,6 +490,60 @@ def _reference_break_at(cue: dict, cut: int) -> bool | None:
     """参考明确句界才强制拆句；其余切点交给可靠声音停顿判断。"""
     context = _reference_break_context(cue)
     return True if context and bisect_right(context[0],cut) in context[1] else None
+
+
+def split_script_cues(cues, document=None):
+    """沿已定位的剧本句界拆分对齐结果，每段保留自己的文字、词时间及参考位置。"""
+    from .reference_match import (DEFAULT_OPTIONS, ReferenceIndex, exact_match_segments, inherit_reference,
+                                  normalized, parse_document)
+    index = None
+    if document and document.get('text'):
+        parsed = parse_document(document['text'], document.get('sources'))
+        index = ReferenceIndex(parsed, DEFAULT_OPTIONS)
+    result = []
+    for cue in cues:
+        if (not cue.get('words') or cue.get('alignment_error') or cue.get('word_timing_error')
+                or (cue.get('alignment') or {}).get('stale')
+                or cue.get('review_decision') in ('skipped','non_script')):
+            result.append(cue)
+            continue
+        match = cue.get('reference_match') or {}
+        query, positions = normalized(cue['text'])
+        references = exact_match_segments(match,cue['text']) if 'manual_reference' not in cue else []
+        if references and index and any(index.raw[p['start']:p['end']]!=p['text'] or
+                not any(s['id']==p['source_id'] and s['start']<=p['start']<p['end']<=s['end']
+                        for s in index.sources) for p in references):
+            references = []
+        if (not references and index and 'manual_reference' not in cue and not match.get('stale')
+                and (match.get('status') not in ('weak','ambiguous','context_mismatch')
+                     or match.get('candidate_confirmed'))):
+            anchor = match.get('reference') or {}
+            a,b = anchor.get('start'),anchor.get('end')
+            valid = (isinstance(a,int) and isinstance(b,int) and 0 <= a < b <= len(index.raw)
+                     and index.raw[a:b] == anchor.get('text') and not anchor.get('reference_only'))
+            references = index.exact_sentence_parts(query, anchor if valid else None)
+        if references:
+            boundaries = []
+            offset = 0
+            for ref in references[:-1]:
+                offset += len(normalized(ref['text'])[0])
+                boundaries.append(offset)
+        else:
+            context = _reference_break_context(cue)
+            boundaries = sorted(context[1]) if context else []
+        if not boundaries or any(k<=0 or k>=len(query) or positions[k]==positions[k-1] for k in boundaries):
+            result.append(cue)
+            continue
+        cuts = [positions[k][0] for k in boundaries]
+        pieces, count = segment_cue(cue, reference_cuts=cuts)
+        if count and references:
+            for piece,ref in zip(pieces,references):
+                metadata = {'reference':ref, 'reference_fingerprint':(document or {}).get('fingerprint')
+                            or match.get('reference_fingerprint')}
+                inherit_reference({**piece, 'script_index':ref['paragraph_start']-1,
+                                   'reference_match':metadata}, [piece])
+        result.extend(pieces)
+    return result, len(result)-len(cues)
 
 
 def _gap_has_audio_support(cue: dict, prev: dict, word: dict, min_gap: float) -> bool:
@@ -476,7 +574,7 @@ def split_on_gaps(cues: list[dict], min_gap: float = 0.6, max_width: float=20) -
     out: list[dict] = []
     splits = 0
     for cue in cues:
-        if cue.get('alignment_error') or (cue.get('alignment') or {}).get('stale'):
+        if cue.get('alignment_error') or cue.get('word_timing_error') or (cue.get('alignment') or {}).get('stale'):
             out.append(cue)
             continue
         words = cue.get("words") or []
@@ -628,6 +726,7 @@ def split_on_gaps(cues: list[dict], min_gap: float = 0.6, max_width: float=20) -
                 from .reference_match import inherit_reference, inherit_manual_reference
                 inherit_manual_reference(cue,pieces)
                 inherit_reference(cue,pieces)
+            _distribute_edge_warnings(cue,pieces)
             out.extend(pieces)
             splits += len(pieces) - 1
     return out, splits

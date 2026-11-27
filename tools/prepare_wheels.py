@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 try:
     from pip_progress import requirement_count, run as run_pip
@@ -17,10 +18,13 @@ except Exception:  # Packaging must still work if the progress display is unavai
     run_pip = None
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from tools.development import export_requirements, uv_executable
+
 WHEELS = ROOT / 'wheels'
 MARKER = WHEELS / '.prepared.json'
-LOCK = ROOT / 'requirements-lock.txt'
-REQUIREMENTS = ROOT / 'requirements.txt'
+LOCK = ROOT / 'uv.lock'
 RUNTIME = ROOT / 'runtime/python/python.exe'
 MIRRORS = (
     'https://mirrors.aliyun.com/pypi/simple',
@@ -35,9 +39,9 @@ def wheel_files():
     return sorted(WHEELS.glob('*.whl'))
 
 
-def source():
-    """锁文件包含全部传递依赖，离线安装才完整；没有锁文件时退回主清单。"""
-    return LOCK if LOCK.is_file() else REQUIREMENTS
+def pip_command():
+    python = f'{sys.version_info.major}.{sys.version_info.minor}'
+    return [uv_executable(), 'tool', 'run', '--python', python, 'pip@26.3']
 
 
 def bundled_python():
@@ -53,15 +57,6 @@ def bundled_python():
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def check_pip():
-    """使用带 pip 的项目虚拟环境，开发环境与便携环境都可准备 wheel。"""
-    result = subprocess.run([sys.executable, '-m', 'pip', '--version'],
-                            capture_output=True, text=True, encoding='utf-8', errors='replace')
-    if result.returncode != 0:
-        raise SystemExit('pip is not available in this Python. '
-                         'Run py main.py setup, then use the project Python to prepare wheels.')
-
-
 def check_target_python():
     """wheel 必须匹配随包 runtime 的 Python，而不是只匹配当前 .venv。"""
     target = bundled_python()
@@ -73,14 +68,8 @@ def check_target_python():
 
 
 def inputs_digest():
-    """requirements.txt 或锁文件任一变化，旧 wheel 都不再可信。"""
-    digest = hashlib.sha256()
-    for path in (REQUIREMENTS, LOCK):
-        if path.is_file():
-            digest.update(path.name.encode('utf-8'))
-            digest.update(b'\0')
-            digest.update(path.read_bytes())
-    return digest.hexdigest()
+    """锁文件变化后需要重新准备 wheel。"""
+    return hashlib.sha256(LOCK.read_bytes()).hexdigest()
 
 
 def current():
@@ -105,10 +94,9 @@ def build(source_path: Path):
     for old in wheel_files():
         old.unlink()
     MARKER.unlink(missing_ok=True)
-    os.environ['PIP_CACHE_DIR'] = str(ROOT / 'data/cache/pip')
-    env = {**os.environ, 'PYTHONUTF8': '1'}
+    env = {**os.environ, 'PYTHONUTF8': '1', 'PIP_CACHE_DIR': str(ROOT / 'data/cache/pip')}
     command = [
-        sys.executable, '-m', 'pip', 'wheel', '--no-input', '--disable-pip-version-check',
+        *pip_command(), 'wheel', '--no-input', '--disable-pip-version-check',
         '--prefer-binary', '--progress-bar', 'off', '--timeout', '30', '--retries', '2',
         '--wheel-dir', str(WHEELS), '-r', str(source_path),
     ]
@@ -120,7 +108,7 @@ def build(source_path: Path):
             code = subprocess.run(attempt, cwd=ROOT, env=env).returncode
         else:
             try:
-                code = run_pip(attempt, total=total, label='Downloading')
+                code = run_pip(attempt, total=total, label='Downloading', env=env)
             except Exception as error:
                 print(f'Progress display failed: {error}', flush=True)
                 code = subprocess.run(attempt, cwd=ROOT, env=env).returncode
@@ -129,12 +117,12 @@ def build(source_path: Path):
     raise SystemExit('Wheel download failed. Check the network and run this tool again.')
 
 
-def verify():
-    """按主清单做一次离线解析，确认这些 wheel 足够装完运行依赖。"""
+def verify(source_path: Path):
+    """按导出的完整依赖做一次离线解析，确认 wheel 与锁定版本匹配。"""
     command = [
-        sys.executable, '-m', 'pip', 'install', '--dry-run', '--ignore-installed',
+        *pip_command(), '--isolated', 'install', '--dry-run', '--ignore-installed',
         '--no-input', '--disable-pip-version-check', '--no-index', '--only-binary=:all:',
-        '--find-links', str(WHEELS), '-r', str(REQUIREMENTS),
+        '--find-links', str(WHEELS), '-r', str(source_path),
     ]
     if subprocess.run(command, cwd=ROOT).returncode != 0:
         raise SystemExit('The wheel set is incomplete; pip cannot install requirements.txt offline.')
@@ -142,7 +130,7 @@ def verify():
     marker = {
         'python': f'{sys.version_info.major}.{sys.version_info.minor}',
         'system': sys.platform,
-        'requirements': source().name,
+        'requirements': LOCK.name,
         'inputs_sha256': inputs_digest(),
         'wheels': len(files),
         'bytes': sum(path.stat().st_size for path in files),
@@ -158,15 +146,16 @@ def main():
     parser.add_argument('--check', action='store_true', help='只检查离线依赖是否已就绪')
     args = parser.parse_args()
     check_target_python()
-    source_path = source()
     if not args.force and current():
         result = {'ready': True, 'wheels': len(wheel_files()), 'files': [path.name for path in wheel_files()]}
     elif args.check:
         raise SystemExit('Offline wheels are missing or outdated. Run tools/prepare_wheels.py first.')
     else:
-        check_pip()
-        build(source_path)
-        result = {'ready': True, **verify()}
+        with tempfile.TemporaryDirectory(prefix='subtitle-wheels-') as folder:
+            source_path = Path(folder) / 'requirements.txt'
+            export_requirements(source_path, root=ROOT)
+            build(source_path)
+            result = {'ready': True, **verify(source_path)}
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

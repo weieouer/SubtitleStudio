@@ -68,8 +68,16 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; 用户配置只在首次安装写入，覆盖升级保留已有设置与模型路径。
+; 前导反斜杠让排除只匹配根目录 config；否则会排除运行库内的
+; accelerate\commands\config 等同名目录，导致引擎导入失败。
 Source: "{#StageDir}\config\*"; DestDir: "{app}\config"; Flags: onlyifdoesntexist recursesubdirs createallsubdirs uninsneveruninstall
-Source: "{#StageDir}\*"; DestDir: "{app}"; Excludes: "config\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StageDir}\*"; DestDir: "{app}"; Excludes: "\config\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+#if Edition == "full"
+[InstallDelete]
+; 共享运行库整套替换，避免旧 DLL、包目录和 dist-info 混入新环境。
+Type: filesandordirs; Name: "{app}\runtime"
+#endif
 
 [Icons]
 #if Edition == "full"
@@ -96,7 +104,13 @@ Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Description: "{cm:LaunchProgra
 Type: filesandordirs; Name: "{app}\.venv"
 Type: filesandordirs; Name: "{app}\data"
 Type: filesandordirs; Name: "{app}\config"
-Type: filesandordirs; Name: "{app}\backend\__pycache__"
+; 程序目录整体清理：首次运行会生成大量 __pycache__，它们不属于安装清单，
+; 只删安装文件会残留数百 MB。
+Type: filesandordirs; Name: "{app}\runtime"
+Type: filesandordirs; Name: "{app}\backend"
+Type: filesandordirs; Name: "{app}\frontend"
+Type: filesandordirs; Name: "{app}\tools"
+Type: filesandordirs; Name: "{app}\wheels"
 Type: dirifempty; Name: "{app}"
 
 [Code]

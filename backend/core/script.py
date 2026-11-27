@@ -12,9 +12,15 @@ def _docx_text(path: str) -> str:
     ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
     lines: list[str] = []
     for p in root.iter(f"{ns}p"):
-        line = "".join(t.text or "" for t in p.iter(f"{ns}t")).strip()
-        if line:
-            lines.append(line)
+        parts = []
+        for node in p.iter():
+            if node.tag == f"{ns}t":
+                parts.append(node.text or "")
+            elif node.tag in (f"{ns}br", f"{ns}cr"):
+                parts.append("\n")
+            elif node.tag == f"{ns}tab":
+                parts.append("\t")
+        lines.append("".join(parts))
     return "\n".join(lines)
 
 

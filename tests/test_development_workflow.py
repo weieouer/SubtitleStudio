@@ -21,6 +21,9 @@ class DevelopmentWorkflowTests(unittest.TestCase):
         with patch.dict(os.environ, {'SUBTITLESTUDIO_DEV_VENV': 'custom'}):
             self.assertEqual(development.environment_path(), Path('custom').resolve())
             self.assertEqual(development.environment_path('explicit'), Path('explicit').resolve())
+        with patch.dict(os.environ, {'UV_PROJECT_ENVIRONMENT': 'uv-custom', 'SUBTITLESTUDIO_DEV_VENV': 'custom'}):
+            self.assertEqual(development.environment_path(), (ROOT / 'uv-custom').resolve())
+            self.assertEqual(development.environment_path('explicit'), Path('explicit').resolve())
 
     def test_global_python_and_source_root_are_rejected(self):
         for directory in (Path(sys.base_prefix).resolve(), ROOT):
@@ -46,14 +49,6 @@ class DevelopmentWorkflowTests(unittest.TestCase):
                     development.validate_environment(environment)
                 probe.assert_not_called()
 
-    def test_installation_uses_explicit_python_and_ignores_global_pip_configuration(self):
-        python = Path('C:/environments/project/Scripts/python.exe')
-        command = development.install_command(python, wheels=ROOT / 'wheels')
-        self.assertEqual(command[:5], [str(python), '-I', '-m', 'pip', '--isolated'])
-        self.assertIn('--no-index', command)
-        self.assertIn('--only-binary=:all:', command)
-        self.assertIn(str(ROOT / 'requirements.txt'), command)
-
     def test_process_environment_removes_package_redirection(self):
         with patch.dict(os.environ, {'PYTHONPATH': 'global', 'PIP_TARGET': 'global', 'PIP_USER': 'yes'}):
             environment = development.process_environment()
@@ -68,11 +63,15 @@ class DevelopmentWorkflowTests(unittest.TestCase):
         python = development.python_path(environment)
         with patch.dict(os.environ, {'PIP_TARGET': 'unrelated', 'PYTHONPATH': 'unrelated'}), \
                 patch.object(development, 'validate_environment', return_value=python), \
-                patch.object(development.subprocess, 'run'), \
-                patch.object(development, 'run_pip', return_value=0) as install:
+                patch.object(development, 'uv_executable', return_value='uv'), \
+                patch.object(development.subprocess, 'run') as subprocess_run:
             development.setup_environment(environment)
-            self.assertNotIn('PIP_TARGET', install.call_args.kwargs['env'])
-            self.assertNotIn('PYTHONPATH', install.call_args.kwargs['env'])
+            sync = subprocess_run.call_args_list[0]
+            self.assertEqual(sync.args[0], ['uv', 'sync', '--project', str(ROOT), '--locked', '--no-active'])
+            self.assertEqual(sync.kwargs['env']['UV_PROJECT_ENVIRONMENT'], str(environment))
+            self.assertNotIn('PIP_TARGET', sync.kwargs['env'])
+            self.assertNotIn('PYTHONPATH', sync.kwargs['env'])
+            self.assertEqual(subprocess_run.call_args.args[0][:3], [str(python), '-I', '-c'])
             self.assertEqual(os.environ['PIP_TARGET'], 'unrelated')
             self.assertEqual(os.environ['PYTHONPATH'], 'unrelated')
 

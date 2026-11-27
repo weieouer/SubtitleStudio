@@ -1,5 +1,21 @@
-# 本项目以源码维护、默认完整 EXE 发布，运行依赖由 requirements*.txt 管理。
-# 此文件仅统一源码工具设置，不声明需要安装到系统的 Python 发行包。
+[project]
+name = "subtitle-studio"
+version = "4.0.2"
+description = "本地字幕提取、剧本参考校准与音轨对齐工具"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "av==19.0.2",
+    "faster-whisper==1.2.1",
+    "jieba==0.42.1",
+    "numpy==2.5.4",
+    "pypinyin==0.55.0",
+    "rapidfuzz==3.14.6",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 120

@@ -1285,8 +1285,20 @@ export async function runFrontendTests(source) {
     assert.equal(ctx.cueStageStatuses(cue).calibration.label,'校准通过');
     assert.equal(ctx.cueStageStatuses(cue).alignment.label,'疑似问题');
     assert(!ctx.badgesHtml(cue).includes('明显错误'));
+    assert(ctx.badgesHtml(cue).includes('时间待复核'));
+    assert.equal(ctx.cueTextClass(cue),'passed');
     ctx.confirmCueTiming(cue);assert(!cue.alignment_warning);
     assert.equal(ctx.cueStageStatuses(cue).alignment.label,'对齐通过');
+  });
+  await test('legacy_split_onset_warning_only_belongs_to_the_first_piece',async()=>{
+    const ctx=make();
+    const warning='VAD 未确认短首字，但后续字词时间连贯；已保留字词模型时间，请试听复核';
+    const rows=['四师姐','我挡住他们','你去找成果'].map((text,i)=>({text,start:i,end:i+.5,source:'gap_split',
+      alignment_warning:warning,audio_refinement:{before_start:0,before_end:3}}));
+    rows.push({...rows[2],audio_refinement:{before_start:3,before_end:4}});
+    const loaded=rows.map(ctx.normalizeCue);
+    assert.deepEqual(loaded.map(c=>!!c.alignment_warning),[true,false,false,true]);
+    assert(rows.every(c=>c.alignment_warning===warning));
   });
   await test('wave_wheel_defaults_zoom_without_modifier_and_pan_only_with_alt',async()=>{
     let details=0,prevented=0;

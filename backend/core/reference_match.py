@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 import math
 import re
 import unicodedata
-from functools import lru_cache
+from functools import cached_property, lru_cache
 import hashlib
 import logging
 import threading
@@ -34,7 +34,7 @@ log=logging.getLogger('studio.reference')
 STATUS_LABELS = {"high": "高度匹配", "typo": "疑似错字", "homophone": "疑似谐音",
                  "missing": "疑似漏字", "extra": "疑似多字", "unmatched": "未匹配", "ambiguous": "多候选匹配",
                  "weak": "逐条匹配待确认", "context_mismatch":"疑似多余台词"}
-NARRATION = re.compile(r"^\s*(?:[【\[（(△▲#]|第.{1,10}[集场幕]|场景[：:]|镜头[：:]|画面[：:]|音效[：:]|BGM[：:])", re.I)
+NARRATION = re.compile(r"^\s*(?:[【\[（(△▲#]|[-*]\s+|第.{1,10}[集场幕]|(?:场景|镜头|画面|音效|出场(?:人物)?|BGM)[：:])", re.I)
 ACTION = re.compile(r"(?:镜头(?:切换|转向|拉近)|画面(?:切换|出现)|缓缓(?:走|转|抬)|转身(?:离开|走)|推开房门|望向窗外)")
 MAX_SCRIPT = 500_000
 MAX_CUES = 5000
@@ -264,10 +264,13 @@ def _match_score(character, phonetic, query_length, reference_length, weight):
 def dialogue_prefixes(raw):
     """只屏蔽明确的角色前缀，保留原文坐标；冒号、引号后的文字仍是对白。"""
     pattern=re.compile(r'(?m)(?:^|(?<=[”」』"。！？!?；;]))[ \t]*(?P<role>[^\n\r:：,，。！？!?；;“”「」『』"…]{1,24})[：:][ \t]*')
-    reserved={'时间','日期','地点','场景','镜头','画面','音效','BGM','备注','注意','提示','说明','例如','比如','原因','结果','答案','价格','网址','比例'}
+    reserved={'时间','日期','地点','场景','镜头','画面','音效','出场','出场人物','BGM','备注','注意','提示','说明','例如','比如','原因','结果','答案','价格','网址','比例'}
     spans=[]
     for match in pattern.finditer(raw):
         role=match['role'].strip()
+        if ((role.startswith('【') and role.endswith('】')) or
+                (role.startswith('[') and role.endswith(']'))):
+            role=role[1:-1].strip()
         following=raw[match.end():match.end()+1]
         if (role in reserved or role.upper() in {'HTTP','HTTPS','FTP','TIME','LOCATION','SCENE','NOTE','SFX','BGM'}
                 or re.match(r'第.{0,10}[集场幕]',role)):continue
@@ -298,6 +301,20 @@ def _index_features(digest, raw):
     for i in range(max(0,len(text)-1)):
         grams[text[i:i+2]].append(i);pygrams[phonetic[i:i+2]].append(i)
     return text,positions,phonetic,grams,pygrams,[p[0] for p in positions],[p[1] for p in positions]
+
+
+def exact_match_segments(match, text):
+    parts = match.get('segments')
+    if (match.get('stale') or match.get('status') != 'high'
+            or not isinstance(parts,list) or len(parts)<2):
+        return []
+    for i,part in enumerate(parts):
+        if (not isinstance(part,dict) or part.get('reference_only') or not isinstance(part.get('text'),str)
+                or not part.get('source_id') or type(part.get('start')) is not int
+                or type(part.get('end')) is not int or not 0<=part['start']<part['end']
+                or (i and (parts[i-1]['end']>part['start'] or parts[0]['source_id']!=part['source_id']))):
+            return []
+    return parts if ''.join(normalized(p['text'])[0] for p in parts)==normalized(text)[0] else []
 
 
 def inherit_manual_reference(parent: dict, pieces: list[dict]) -> bool:
@@ -341,6 +358,14 @@ def inherit_reference(parent: dict, pieces: list[dict]) -> bool:
     if any(a>=b for a,b in zip(mapped,mapped[1:])):return False
     if any(positions[k-1]==positions[k] for k in mapped[1:-1] if 0<k<len(positions)):return False
     cuts=[0,*(positions[k][0] for k in mapped[1:-1]),len(raw)]
+    lines = raw.splitlines(keepends=True)
+    line_starts, paragraph_starts = [], []
+    at = 0
+    for line in lines:
+        line_starts.append(at)
+        if line.strip():
+            paragraph_starts.append(at)
+        at += len(line)
     for piece,lo,hi in zip(pieces,cuts,cuts[1:]):
         q=normalized(piece['text'])[0];r=normalized(raw[lo:hi])[0]
         character=fuzz.ratio(q,r)/100;phonetic=fuzz.ratio(pinyin_tokens(q),pinyin_tokens(r))/100
@@ -352,8 +377,17 @@ def inherit_reference(parent: dict, pieces: list[dict]) -> bool:
             current.update(start=reference['start']+lo,end=reference['start']+hi)
         if 'source_start' in reference:
             current.update(source_start=reference['source_start']+lo,source_end=reference['source_start']+hi)
+        if len(lines)>1:
+            first = lo+len(raw[lo:hi])-len(raw[lo:hi].lstrip())
+            last = lo+len(raw[lo:hi].rstrip())-1
+            for field,starts in (('line',line_starts),('paragraph',paragraph_starts)):
+                base = reference.get(field+'_start')
+                if isinstance(base,int):
+                    current[field+'_start'] = base+bisect_right(starts,first)-1
+                    current[field+'_end'] = base+bisect_right(starts,last)-1
         stale=score<max(effective_minimum(len(q),DEFAULT_OPTIONS),match.get('minimum_used',0))
-        piece.update(script_text=current['text'],script_index=parent.get('script_index'),match_ratio=round(score,4),
+        script_index = current['paragraph_start']-1 if 'paragraph_start' in current else parent.get('script_index')
+        piece.update(script_text=current['text'],script_index=script_index,match_ratio=round(score,4),
                      match_needs_review=stale or status!='high',reference_match={
                          **match,'status':status,'label':STATUS_LABELS[status],'reference':current,
                          'score':round(score,4),'character_score':round(character,4),'pinyin_score':round(phonetic,4),
@@ -381,6 +415,18 @@ class ReferenceIndex:
         self.upper=bisect_right(ends,position_bounds[1]) if position_bounds else len(self.text)
         self.paragraphs = document["paragraphs"]
         self.starts = [p["start"] for p in self.paragraphs]
+        # 只跳过格式明确的动作/音效行；场次标题、普通段落仍计入距离。
+        self.stage_ranges = [(bisect_left(starts,p['start']),bisect_left(starts,p['end']))
+                             for p in self.paragraphs
+                             if re.match(r'^\s*(?:[▲△]|【(?:音效|镜头|画面)】)',p['text'])]
+        self.stage_ends = [b for a,b in self.stage_ranges]
+        self.interruptions = []
+        for p in self.paragraphs:
+            if not re.search(r'[：:]\s*[“「『"]?[\u3400-\u9fff]{1,2}(?:—{2,}|…+)[”」』"]?\s*$',p['text']):
+                continue
+            lo,hi = bisect_left(starts,p['start']),bisect_left(starts,p['end'])
+            if 0<hi-lo<=2:
+                self.interruptions.append((lo,hi))
         self.sentences = []
         for source in self.sources:
             for a, b in sentence_ranges(self.raw[source['start']:source['end']]):
@@ -394,6 +440,20 @@ class ReferenceIndex:
         self.sentence_end_set = set(self.sentence_ends)
         self.cache = OrderedDict();self.candidate_queries=0;self.candidate_cache_hits=0
         self.repeated_queries=set();self.exact_cache=OrderedDict()
+
+    def dialogue_windows(self, lo, hi):
+        windows = []
+        cursor = lo
+        for i in range(bisect_right(self.stage_ends,lo),len(self.stage_ranges)):
+            a,b = self.stage_ranges[i]
+            if a>=hi:
+                break
+            if a>cursor:
+                windows.append((cursor,a))
+            cursor = max(cursor,b)
+        if cursor<hi:
+            windows.append((cursor,hi))
+        return windows
 
     def exact_after(self,query,sid,start,end=None):
         lo,hi=self.source_ranges[sid]
@@ -411,6 +471,85 @@ class ReferenceIndex:
         self.exact_cache[key]=hits
         if len(self.exact_cache)>2048:self.exact_cache.popitem(last=False)
         return hits
+
+    @cached_property
+    def spoken_index(self):
+        return self._spoken_index(self.dialogue_windows(self.lower,self.upper))
+
+    @cached_property
+    def uninterrupted_index(self):
+        windows = []
+        cursor = self.lower
+        for lo,hi in self.interruptions:
+            if hi<=cursor or lo>=self.upper:
+                continue
+            windows.extend(self.dialogue_windows(cursor,lo))
+            cursor = hi
+        windows.extend(self.dialogue_windows(cursor,self.upper))
+        return self._spoken_index(windows)
+
+    def _spoken_index(self, windows):
+        offsets, chunks, length = [], [], 0
+        for a,b in windows:
+            offsets.append(length)
+            chunks.append(self.text[a:b])
+            length += b-a
+        return ''.join(chunks), offsets, windows
+
+    def exact_sentence_parts(self, query, reference=None):
+        """定位整条字幕，再逐句取原文；换角色时每句仍有独立且连续的原文坐标。"""
+        if len(query) < 2:
+            return []
+        spoken, offsets, runs = self.spoken_index
+        match = None
+        pos = spoken.find(query)
+        skipped = pos<0 and self.interruptions
+        if skipped:
+            spoken,offsets,runs = self.uninterrupted_index
+            pos = spoken.find(query)
+        for _ in range(256):
+            if pos < 0:
+                break
+            first_run = bisect_right(offsets,pos)-1
+            last_run = bisect_right(offsets,pos+len(query)-1)-1
+            start = runs[first_run][0]+pos-offsets[first_run]
+            end = runs[last_run][0]+pos+len(query)-offsets[last_run]
+            pos = spoken.find(query,pos+1)
+            if skipped:
+                # 只有一条明确被打断的短对白，且两侧各有足够原字吻合才允许跳过。
+                j = bisect_left(self.interruptions,(start,))
+                if (j>=len(self.interruptions) or self.interruptions[j][1]>=end
+                        or (j+1<len(self.interruptions) and self.interruptions[j+1][0]<end)
+                        or end-start>512):
+                    continue
+                lo,hi = self.interruptions[j]
+                if any(sum(b-a for a,b in self.dialogue_windows(x,y))<2 for x,y in ((start,lo),(hi,end))):
+                    continue
+            first, last = self.positions[start][0], self.positions[end-1][1]
+            if reference and not (first < reference['end'] and reference['start'] < last):
+                continue
+            spans = []
+            for lo,hi in runs[first_run:last_run+1]:
+                lo,hi = max(lo,start),min(hi,end)
+                cuts = [lo, *self.sentence_starts[bisect_right(self.sentence_starts,lo):
+                                                  bisect_left(self.sentence_starts,hi)], hi]
+                spans.extend(zip(cuts,cuts[1:]))
+            parts = []
+            for a,b in spans:
+                sid = self.source_index(a,b)
+                if sid is None or (parts and parts[0]['source_index'] != sid):
+                    break
+                part = self.describe(a,b)
+                if part['reference_only']:
+                    break
+                parts.append({**part,'norm_start':a,'norm_end':b})
+            else:
+                if match is not None:
+                    return []
+                match = parts
+        if pos >= 0:
+            return []
+        return match if match and len(match)>1 else []
 
     def source_index(self,start,end):
         raw_start,raw_end=self.positions[start][0],self.positions[end-1][1]
@@ -586,6 +725,34 @@ class ReferenceIndex:
         return (not candidate["reference_only"] and candidate["character_score"] >= .4
                 and candidate["score"] >= effective_minimum(length, self.options))
 
+    def homophone_anchor(self, query):
+        sounds = pinyin_tokens(query)
+        offset = min(range(len(query)-1), key=lambda k: len(self.pygrams.get(sounds[k:k+2], ())))
+        postings = self.pygrams.get(sounds[offset:offset+2], ())
+        lo = bisect_left(postings,self.lower+offset)
+        hi = bisect_right(postings,self.upper-len(query)+offset)
+        if hi-lo>256:
+            return None
+        found = None
+        for position in postings[lo:hi]:
+            start = position-offset
+            end = start+len(query)
+            if self.phonetic[start:end]!=sounds:
+                continue
+            sid = self.source_index(start,end)
+            if sid is None or self.describe(start,end)['reference_only']:
+                continue
+            differences = sum(a!=b for a,b in zip(query,self.text[start:end]))
+            if differences>2:
+                continue
+            if found is not None or differences>1:
+                return None
+            score = _match_score(1-differences/len(query),1.,len(query),len(query),self.options['pinyin_weight'])
+            if score<effective_minimum(len(query),self.options):
+                continue
+            found = {'norm_start':start,'norm_end':end,'source_index':sid}
+        return found
+
 
 @dataclass
 class Node:
@@ -661,6 +828,9 @@ def _context_constraints(index, queries, cues, excluded, sequence_indices=None):
                     found.append({'norm_start':start,'norm_end':end,'source_index':sid})
                     if len(found)>32:break
             if len(query)>=4 and len(found)==1:anchor=found[0]
+            if not found and hi-lo<=256 and len(query)>=6:
+                # ASR 的一个同音错字也可以定位整句，但另一处近似对白会使位置不确定。
+                anchor = index.homophone_anchor(query)
         anchors.append(anchor)
         occurrences.append(found if len(found)<=32 else [])
     # 前一句常是“好的”等重复短句；再向前一句、向后两句寻找可靠锚点，
@@ -693,7 +863,9 @@ def _context_constraints(index, queries, cues, excluded, sequence_indices=None):
                     or cues[right]['start']-cues[left]['end']>20
                     or (sequence_indices is not None and sequence_indices[right]-sequence_indices[left]!=right-left)):continue
             lower,upper=a['norm_end'],b['norm_start']
-            if upper-lower>max(24,min(120,sum(len(q) for q in queries[left+1:right])*2+12)):continue
+            if upper-lower>512:continue
+            spoken_length=sum(stop-start for start,stop in index.dialogue_windows(lower,upper))
+            if spoken_length>max(24,min(120,sum(len(q) for q in queries[left+1:right])*2+12)):continue
             for ci in range(left+1,right):
                 if ci in excluded:continue
                 own=anchors[ci]
@@ -719,6 +891,11 @@ def _context_constraints(index, queries, cues, excluded, sequence_indices=None):
 def _context_candidate(index,query,context):
     lo,hi=context['lower'],context['upper']
     if not query or lo>=hi:return None
+    windows = index.dialogue_windows(lo,hi)
+    if not windows:
+        return None
+    if len(windows)==1:
+        lo,hi = windows[0]
     fragment = index.text[lo:hi]
     py = pinyin_tokens(query)
     # 一条字幕夹在同一来源的两句连续锚点之间，先核对剩下的完整分句。
@@ -740,16 +917,28 @@ def _context_candidate(index,query,context):
             context_score = (1+score)/2 if corroborated else score
             return {**ref, 'norm_start':lo, 'norm_end':hi, 'character_score':character,
                     'pinyin_score':phonetic, 'score':score, 'context_score':context_score}
-    alignment=fuzz.partial_ratio_alignment(query,fragment)
-    if alignment is None:return None
-    start,end=lo+alignment.dest_start,lo+alignment.dest_end
-    if start>=end or index.source_index(start,end)!=context['source_index']:return None
-    character=fuzz.ratio(query,index.text[start:end])/100
-    phonetic=fuzz.ratio(py,index.phonetic[start:end])/100
-    score=_match_score(character,phonetic,len(query),end-start,index.options['pinyin_weight'])
-    candidate={**index.describe(start,end),'norm_start':start,'norm_end':end,
-               'character_score':character,'pinyin_score':phonetic,'score':score}
-    return candidate if index.reliable(candidate,len(query)) else None
+    # 邻近舞台说明或重复台词会干扰单次字符滑窗。在同一局部区间同时核对
+    # 完整分句和读音命中，避免把姓名的同音首字从参考里截掉。
+    first = bisect_left(index.sentence_starts, lo)
+    last = bisect_left(index.sentence_starts, hi)
+    spans = {(a,b) for a,b in index.sentences[first:last] if b <= hi}
+    for needle, haystack in ((query, fragment), (py, index.phonetic[lo:hi])):
+        alignment = fuzz.partial_ratio_alignment(needle, haystack)
+        if alignment:
+            spans.add((lo+alignment.dest_start, lo+alignment.dest_end))
+    best, best_rank = None, -1
+    for start,end in sorted(spans):
+        if start>=end or index.source_index(start,end)!=context['source_index']:
+            continue
+        character=fuzz.ratio(query,index.text[start:end])/100
+        phonetic=fuzz.ratio(py,index.phonetic[start:end])/100
+        score=_match_score(character,phonetic,len(query),end-start,index.options['pinyin_weight'])
+        candidate={**index.describe(start,end),'norm_start':start,'norm_end':end,
+                   'character_score':character,'pinyin_score':phonetic,'score':score}
+        rank = score + (.04 if start in index.sentence_start_set and end in index.sentence_end_set else 0)
+        if rank > best_rank and index.reliable(candidate,len(query)):
+            best, best_rank = candidate, rank
+    return best
 
 
 def match_reference(cues: list[dict], document: dict, options: dict | None = None,
@@ -775,8 +964,30 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
     def within_context(candidate,start,end):
         return all(ci not in contexts or (candidate['source_index']==contexts[ci]['source_index']
             and contexts[ci]['lower']<=candidate['norm_start']<candidate['norm_end']<=contexts[ci]['upper']) for ci in range(start,end))
+    # 同一条 ASR 可能包含相邻角色的回答。整条逐字命中时以各自原文区间
+    # 参与顺序搜索，防止校准采用其中半句后丢掉另一位角色的对白。
+    multipart = {}
+    for ci,query in enumerate(queries):
+        if not index.dialogue_prefixes and not index.stage_ranges:
+            break
+        if ci%64==0:
+            check(.05,'核对跨段对白')
+        if ci in excluded:
+            continue
+        parts = index.exact_sentence_parts(query)
+        if not parts:
+            continue
+        a,b = parts[0]['norm_start'],parts[-1]['norm_end']
+        if index.source_index(a,b) is not None and index.text[a:b] == query:
+            continue
+        candidate = {**parts[0], 'norm_end':b, 'segments':parts,
+                     'text':''.join(p['text'] for p in parts),
+                     'score':1., 'character_score':1., 'pinyin_score':1.}
+        if within_context(candidate,ci,ci+1):
+            multipart[ci] = candidate
+            bounded_cues.discard(ci)
     # 局部字符滑窗有时截掉同音字。先检查其它确实落在此区间的候选，再认定缺句。
-    blocked = {ci for ci, candidate in local_candidates.items() if candidate is None
+    blocked = {ci for ci, candidate in local_candidates.items() if candidate is None and ci not in multipart
                and not any(within_context(c, ci, ci+1) and index.reliable(c, len(queries[ci]))
                            for c in index.candidates(queries[ci]))}
     source_ids={source['id']:source for source in doc['sources']}
@@ -797,13 +1008,15 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
                 break
             if k > 1 and sequence_indices is not None and sequence_indices[end-1] != sequence_indices[end-2]+1:
                 break
-            if k > 1 and (i in bounded_cues or end-1 in bounded_cues):
+            if k > 1 and (i in bounded_cues or end-1 in bounded_cues or i in multipart or end-1 in multipart):
                 break
             if k>1 and hints[end-2] and hints[end-1] and hints[end-2]!=hints[end-1]:break
             query += queries[end - 1]
             if not query:
                 break
-            if k == 1 and i in bounded_cues:
+            if k == 1 and i in multipart:
+                candidates = [multipart[i], *index.candidates(query)]
+            elif k == 1 and i in bounded_cues:
                 candidates = [local_candidates[i]]
             else:
                 candidates = index.candidates(query)
@@ -868,6 +1081,9 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
         check(.92, '整理匹配结果')
         if not candidate:
             continue
+        if candidate.get('segments'):
+            positions[start] = (candidate['norm_start'],candidate['norm_end'],start,end,candidate)
+            continue
         query = "".join(queries[start:end])
         lengths = [0]
         for q in queries[start:end]:
@@ -893,7 +1109,15 @@ def match_reference(cues: list[dict], document: dict, options: dict | None = Non
         match = {"status": "unmatched", "label": STATUS_LABELS["unmatched"], "query_text": cue["text"],
                  "character_score": 0., "pinyin_score": 0., "score": 0., "differences": [],
                  "alternatives": [], "reference": None, "stale": False, "minimum_used": effective_minimum(len(query), opts)}
-        if ci in positions:
+        if ci in positions and positions[ci][4].get('segments'):
+            candidate = positions[ci][4]
+            parts = candidate['segments']
+            cue.update(script_text=candidate['text'],script_index=parts[0]['paragraph_start']-1,
+                       match_ratio=1.,match_needs_review=False)
+            match.update(status='high',segments=parts,score=1.,character_score=1.,pinyin_score=1.)
+            hits.append({'cue_index':ci,'script_index':cue['script_index'],'ratio':1.,
+                         'source_id':parts[0]['source_id'],'source_name':parts[0]['source_name']})
+        elif ci in positions:
             a, b, gstart, gend, group_candidate = positions[ci]
             reference = index.describe(a, b)
             refnorm = index.text[a:b]

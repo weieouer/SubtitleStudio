@@ -1,4 +1,4 @@
-# Python 本地环境与自动生成的缓存，下载源码后通过 main.py setup 重建
+# Python 本地环境与自动生成的缓存，下载源码后通过 uv sync --locked 重建
 /.venv/
 /.venv.broken_*/
 __pycache__/
@@ -62,4 +62,4 @@ Desktop.ini
 
 # 注意：已跟踪的文件仍会出现在提交中，需要另行从 Git 索引移除，本规则不删除本地文件。
 # backend/、frontend/（含图标等资源）、tests/ 通用测试、tools/、installer/ 源码均保留。
-# requirements*.txt、pyproject.toml、config/engines.json、config/firered.json 是必要配置，不要忽略。
+# pyproject.toml、uv.lock、.python-version、config/engines.json、config/firered.json 随源码维护。

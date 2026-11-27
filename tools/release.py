@@ -17,7 +17,7 @@ def build_installer(output: Path, environment: Path, *, iscc: Path | None = None
     if not stage_only and executable.exists():
         raise FileExistsError(f'安装包已存在，请指定其他输出目录：{executable}')
     from .prepare_runtime import prepared_runtime
-    status = prepared_runtime(ROOT / 'installer/build/prepared-runtime')
+    status = prepared_runtime(ROOT / 'installer/build/prepared-runtime', environment=environment)
     if not status['ready']:
         print('运行库需要重新准备：' + status['reason'], flush=True)
         subprocess.run([str(python), str(ROOT / 'tools/prepare_runtime.py')], cwd=ROOT,

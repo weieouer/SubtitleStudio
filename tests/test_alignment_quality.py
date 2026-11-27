@@ -20,6 +20,65 @@ class Word:
 
 
 class AlignmentQualityTests(unittest.TestCase):
+    def test_detached_first_word_needs_agreement_between_context_windows(self):
+        cues=[{'text':'前面','start':0.,'end':.09},
+              {'text':'研究项目','start':.8,'end':1.6},
+              {'text':'后面','start':1.8,'end':2.2}]
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'audio.wav'
+            with wave.open(str(path),'wb') as wav:
+                wav.setparams((1,2,1000,0,'NONE',''))
+                wav.writeframes(np.arange(3000,dtype='<i2').tobytes())
+            class Model:
+                calls=0
+                def align(self,audio,text,language):
+                    self.calls+=1
+                    with wave.open(audio,'rb') as wav:
+                        origin=struct.unpack('<h',wav.readframes(1))[0]/1000
+                    timings={'前面':(0.,.09),'后面':(1.8,2.2),
+                             '研':(.1,.18) if self.calls<=2 else (1.,1.08),
+                             '究':(1.08,1.16),'项':(1.16,1.24),'目':(1.24,1.32)}
+                    tokens=[t for line in text.splitlines() for t in (list(line) if line=='研究项目' else [line])]
+                    return [[Word(t,timings[t][0]-origin,timings[t][1]-origin) for t in tokens]]
+            model=Model()
+            words,summary=align_chunk(model,{'path':str(path),'text':'前面\n研究项目\n后面','cues':cues})
+            out=apply_word_times([dict(c) for c in cues],[0,1,2],words)
+        self.assertEqual(model.calls,4)
+        self.assertEqual(summary,{'attempted':1,'accepted':1,'unresolved':0})
+        self.assertNotIn('alignment_error',out[1])
+        self.assertEqual((out[1]['start'],out[1]['end']),(1.,1.32))
+
+    def test_context_retry_confirms_observed_words_and_leaves_neighbors_untouched(self):
+        cues=[{'text':'先来','start':.4,'end':.7},{'text':'马上','start':1.,'end':1.32},
+              {'text':'回家','start':1.8,'end':2.2}]
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'audio.wav'
+            with wave.open(str(path),'wb') as wav:
+                wav.setparams((1,2,1000,0,'NONE',''))
+                wav.writeframes(np.arange(3000,dtype='<i2').tobytes())
+            for corroborated in (True,False):
+                class Model:
+                    calls=0
+                    def align(self,audio,text,language):
+                        self.calls+=1
+                        with wave.open(audio,'rb') as wav:
+                            origin=struct.unpack('<h',wav.readframes(1))[0]/1000
+                        measured={'先来':(.4,.7),'马':(1.,1.),'上':(1.16,1.32),'回家':(1.8,2.2)}
+                        if self.calls==3:
+                            start=1. if corroborated else 1.45
+                            measured.update(马=(start,start+.16),上=(start+.16,start+.32))
+                        tokens=[t for line in text.splitlines() for t in (list(line) if line=='马上' else [line])]
+                        return [[Word(t,measured[t][0]-origin,measured[t][1]-origin) for t in tokens]]
+                model=Model()
+                words,summary=align_chunk(model,{'path':str(path),'text':'先来\n马上\n回家','cues':cues})
+                delivered=apply_word_times([dict(c) for c in cues],[0,1,2],words)
+                self.assertEqual(summary['accepted'],int(corroborated))
+                self.assertEqual(bool(delivered[1].get('alignment_error')),not corroborated)
+                self.assertEqual([(delivered[i]['start'],delivered[i]['end']) for i in (0,2)],[(.4,.7),(1.8,2.2)])
+                if corroborated:
+                    self.assertEqual(model.calls,3)
+                    self.assertEqual([(w['start'],w['end']) for w in delivered[1]['words']],[(1.,1.16),(1.16,1.32)])
+
     def test_short_cue_late_inside_coarse_input_keeps_valid_word_times(self):
         for text,end,starts,ends in [('四师姐',3.52,[3.16,3.32,3.40],[3.32,3.40,3.56]),
                                     ('拿到了',2.32,[2.02,2.18,2.34],[2.18,2.34,2.42])]:

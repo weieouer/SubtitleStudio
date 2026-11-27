@@ -7,7 +7,7 @@ const THEME_KEY = "subtitleStudio.theme";
 const MODE_LABEL = { extract: "字幕提取", align: "字幕对齐" };
 const THEMES = ["system", "light", "dark"];
 const SESSION_TOKEN = document.querySelector('meta[name="subtitle-session"]')?.content || "";
-const APP_VERSION = '4.0.0';
+const APP_VERSION = '4.0.2';
 const projectVersions = new Map();
 const projectConflicts = new Set();
 let projectSaveChain = Promise.resolve();
@@ -1912,8 +1912,22 @@ async function loadWaveform() {
   }
 }
 
-function normalizeCue(c, i) {
+function normalizeCue(c, i, rows) {
   c={...c};releaseVerificationExclusions([c]);
+  // 旧工程将整句的人声边界提示复制给每个子条。只有相邻子条的
+  // 原始声学区间和提示都相同时，才能确定这是同一次检测。
+  if(Array.isArray(rows) && ['split','gap_split'].includes(c.source) && c.alignment_warning){
+    const edge=c.audio_refinement;
+    const sibling=other=>other && ['split','gap_split'].includes(other.source)
+      && Number.isFinite(edge?.before_start) && Number.isFinite(edge?.before_end)
+      && other.audio_refinement?.before_start===edge.before_start && other.audio_refinement?.before_end===edge.before_end
+      && other.alignment_warning===c.alignment_warning;
+    const warnings=c.alignment_warning.split(/；(?=(?:VAD 未确认短[首尾]字|[首尾]字仅由孤立声段支持))/);
+    const keep=warnings.filter(w=>!(sibling(rows[i-1]) && /^(VAD 未确认短首字|首字仅由孤立声段支持)/.test(w))
+      && !(sibling(rows[i+1]) && /^(VAD 未确认短尾字|尾字仅由孤立声段支持)/.test(w)));
+    if(keep.length)c.alignment_warning=keep.join('；');
+    else delete c.alignment_warning;
+  }
   delete c.merge_suggestion; // 旧工程遗留字段；校准已不再生成合并建议
   return {
     ...c,
@@ -2181,10 +2195,9 @@ function confirmCueTiming(cue,source='manual') {
 }
 
 function cueTextClass(cue) {
-  const statuses=Object.values(cueStageStatuses(cue));
-  if(statuses.some(s=>s.status==='suspect'&&s.obvious))return 'context-warning';
-  if(statuses.some(s=>s.status==='suspect'))return 'minor-warning';
-  return statuses.some(s=>s.status==='passed')?'passed':'';
+  const content=cueStageStatuses(cue).calibration;
+  if(content.status==='suspect')return content.obvious?'context-warning':'minor-warning';
+  return content.status==='passed'?'passed':'';
 }
 
 function computeCueVerification(cue) {
@@ -2307,9 +2320,11 @@ function cueReviewHtml(cue, i) {
   const approve = !hasCompletedModification(cue)&&cueVerification(cue)?.status==='suspect'
     ? '<button type="button" class="mini" data-review="approve">已试听，保留字幕</button>' : '';
   if (m) {
-    if(hasCompletedModification(cue))return '<details class="match-alternatives"><summary>历史参考'+(m.reference?.source_name?' · '+escapeHtml(m.reference.source_name):'')+' <span class="match-inline-note">原识别记录保留</span></summary></details>';
-    details = '<details class="match-alternatives"><summary>' + escapeHtml(m.stale ? '参考待复核' : m.label || '匹配详情') + ' · ' + score(m.score) + (m.reference?.source_name?' · '+escapeHtml(m.reference.source_name):'') + '</summary>' +
+    const source = m.reference?.source_name || m.segments?.[0]?.source_name;
+    if(hasCompletedModification(cue))return '<details class="match-alternatives"><summary>历史参考'+(source?' · '+escapeHtml(source):'')+' <span class="match-inline-note">原识别记录保留</span></summary></details>';
+    details = '<details class="match-alternatives"><summary>' + escapeHtml(m.stale ? '参考待复核' : m.label || '匹配详情') + ' · ' + score(m.score) + (source?' · '+escapeHtml(source):'') + '</summary>' +
       '<p class="match-metrics">字符 ' + score(m.character_score) + ' · 拼音 ' + score(m.pinyin_score) + '</p>' +
+      (m.segments || []).map(part=>'<p>第 '+escapeHtml(String(part.paragraph_start))+' 段 · '+escapeHtml(part.text)+'</p>').join('') +
       (m.warning?'<p class="match-context">'+escapeHtml(m.warning)+'</p>':'') +
       (m.context?.status === 'bounded' ? '<p class="match-context">参考原文位于前后两条已定位字幕之间。</p>' : '') +
       (['weak','ambiguous'].includes(m.status) && m.reference && !m.stale && !m.reference.reference_only ? '<button type="button" class="mini" data-review="confirm" '+(m.candidate_confirmed?'disabled':'')+'>'+ (m.candidate_confirmed?'位置已确认':'确认当前位置')+'</button>' : '') +
@@ -2391,7 +2406,9 @@ function badgesHtml(cue) {
   for(const [stage,status] of Object.entries(cueStageStatuses(cue))) {
     const css=status.status==='passed'?'verified':status.status==='suspect'?(status.obvious?'noise':'low'):'pending';
     const name=stage==='calibration'?'校准':'对齐';
-    out.push(`<span class="badge ${css}" data-stage="${stage}" data-status="${status.status}" data-tip="${escapeHtml(name+'：'+status.reason)}">${status.label}</span>`);
+    const label=stage==='alignment' && status.status==='suspect' ? (status.obvious?'时间异常':'时间待复核') : status.label;
+    const tip=label===status.label ? status.reason : status.label+' · '+status.reason;
+    out.push(`<span class="badge ${css}" data-stage="${stage}" data-status="${status.status}" data-tip="${escapeHtml(name+'：'+tip)}">${label}</span>`);
   }
   return out.join("") || '<span class="badge">—</span>';
 }
@@ -2989,6 +3006,11 @@ async function startAsr(task = 'asr', region = null, options = {}) {
     try {
       if (!options.resume) job = (await api(task === 'align' ? '/api/alignment/jobs' : '/api/jobs', { path, model: s.model, device: s.device,
         cues: task === 'align' ? (options.indices?options.indices.map(i=>state.cues[i]):state.cues) : undefined, vad: s.vad, keep_interjections: s.keepInterjections,
+        document: task === 'align' && state.script.length ? {
+          text: state.scriptDocument?.text ?? state.script.map(line=>line.text).join('\n'),
+          sources: state.scriptDocument?.sources,
+          fingerprint: documentFingerprint(state.scriptDocument,state.script)
+        } : undefined,
         gap_seconds: s.gap, max_width: s.width,
         width_split: task === 'align' ? true : undefined,
         region: region ? {start:region.start,end:region.end} : undefined, request_id: id })).job;
@@ -3153,6 +3175,7 @@ async function alignAndVerify() {
   const gapSplits=Number(job.info?.gap_splits)||0,widthSplits=Number(job.info?.width_splits)||0;
   const durationRepairs=Number(job.info?.duration_repairs?.length)||0;
   const parts=[];
+  if(job.info?.script_splits)parts.push(`按剧本分段 ${job.info.script_splits} 条`);
   if(gapSplits)parts.push(`停顿断句 ${gapSplits} 条`);
   if(widthSplits)parts.push(`按每行字数分段 ${widthSplits} 条`);
   if(durationRepairs)parts.push(`按字数收紧 ${durationRepairs} 条`);
